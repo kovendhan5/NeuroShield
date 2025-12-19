@@ -8,7 +8,7 @@
 ## 1. Introduction & Overview
 NeuroShield is a local proof-of-concept (POC) implementing an AIOps-driven self-healing CI/CD system. It uses transformer-based log analysis to predict failures and a Proximal Policy Optimization (PPO) reinforcement learning agent to autonomously mitigate them, targeting ~40%+ MTTR reduction in simulations (inspired by the paper's 47% result on Sock Shop benchmark).
 
-**Goal**: Build a functional MVP in 1 month (zero cost, Windows 11 local) using VSCode Copilot for rapid code generation. Showcase end-to-end DevOps + ML/RL skills for portfolio/resume.
+**Goal**: Build a functional MVP in 1 month (zero cost, Windows 11 local) using VSCode. Showcase end-to-end DevOps + ML/RL skills for portfolio/resume.
 
 **Core Problem Solved**: Manual CI/CD failure troubleshooting increases downtime. NeuroShield shifts to predictive, autonomous recovery.
 
