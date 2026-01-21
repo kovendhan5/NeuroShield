@@ -19,7 +19,7 @@ from .env import NeuroShieldEnv
 def parse_args() -> argparse.Namespace:
     """Parse CLI arguments."""
     parser = argparse.ArgumentParser(description="Train PPO policy for CI/CD recovery.")
-    parser.add_argument("--timesteps", type=int, default=10_000, help="Training timesteps")
+    parser.add_argument("--timesteps", type=int, default=50_000, help="Training timesteps")
     parser.add_argument("--model-dir", type=str, default="models", help="Model output directory")
     return parser.parse_args()
 
@@ -30,12 +30,19 @@ def _make_env(seed: int) -> NeuroShieldEnv:
     return env
 
 
-def _evaluate(model: PPO, episodes: int = 10) -> None:
+def _evaluate(model: PPO, episodes: int = 50) -> None:
     """Run evaluation episodes and print metrics."""
     eval_env = _make_env(seed=42)
     action_counts: Dict[int, int] = {0: 0, 1: 0, 2: 0, 3: 0}
     mttr_reductions: List[float] = []
     successes = 0
+    optimal_mttr = {
+        "OOM": 7.5,
+        "FlakyTest": 4.3,
+        "DependencyConflict": 9.8,
+        "NetworkLatency": 6.2,
+        "Healthy": 0.5,
+    }
 
     for _ in range(episodes):
         obs, _ = eval_env.reset()
@@ -45,19 +52,34 @@ def _evaluate(model: PPO, episodes: int = 10) -> None:
         _, _, _, _, info = eval_env.step(action)
 
         mttr = float(info.get("mttr", 12.4))
+        failure_type = str(info.get("failure_type", "Healthy"))
         mttr_reduction = max(0.0, (12.4 - mttr) / 12.4) * 100.0
         mttr_reductions.append(mttr_reduction)
-        successes += int(bool(info.get("success", False)))
+        threshold = optimal_mttr.get(failure_type, 12.4) + 1.0
+        if failure_type == "Healthy":
+            threshold = 1.5
+        successes += int(mttr <= threshold)
 
     avg_reduction = float(np.mean(mttr_reductions)) if mttr_reductions else 0.0
     success_rate = successes / max(episodes, 1)
 
-    print("Evaluation Results")
-    print(f"Average MTTR reduction (%): {avg_reduction:.2f}")
-    print(f"Success rate: {success_rate:.2f}")
-    print("Action distribution:")
-    for action, count in action_counts.items():
-        print(f"  Action {action}: {count}")
+    action_percentages = [
+        action_counts[0] / max(episodes, 1) * 100.0,
+        action_counts[1] / max(episodes, 1) * 100.0,
+        action_counts[2] / max(episodes, 1) * 100.0,
+        action_counts[3] / max(episodes, 1) * 100.0,
+    ]
+
+    print(f"=== Final Evaluation ({episodes} episodes) ===")
+    print(f"Avg MTTR Reduction: {avg_reduction:.1f}%")
+    print(f"Success Rate: {success_rate * 100.0:.0f}%")
+    print(
+        "Action Distribution: ["
+        f"{action_percentages[0]:.1f}%, "
+        f"{action_percentages[1]:.1f}%, "
+        f"{action_percentages[2]:.1f}%, "
+        f"{action_percentages[3]:.1f}%]"
+    )
 
 
 def main() -> None:
@@ -91,7 +113,7 @@ def main() -> None:
         output_dir.mkdir(parents=True, exist_ok=True)
         model.save(str(output_dir / "ppo_policy.zip"))
 
-        _evaluate(model, episodes=10)
+        _evaluate(model, episodes=50)
     except Exception as exc:
         raise RuntimeError(f"Training failed: {exc}") from exc
 

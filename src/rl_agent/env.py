@@ -8,7 +8,7 @@ import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
 
-from .simulator import FAILURE_TYPES, simulate_action
+from .simulator import FAILURE_TYPES, BASELINE_MTTR_MINUTES, OPTIMAL_MTTR_MINUTES, simulate_action
 
 
 class NeuroShieldEnv(gym.Env):
@@ -35,7 +35,10 @@ class NeuroShieldEnv(gym.Env):
         if seed is not None:
             self.rng.seed(seed)
         self.steps = 0
-        self.current_failure_type = self.rng.choice(FAILURE_TYPES)
+        if self.rng.random() < 0.3:
+            self.current_failure_type = "Healthy"
+        else:
+            self.current_failure_type = self.rng.choice([t for t in FAILURE_TYPES if t != "Healthy"])
         result = simulate_action(self.current_failure_type, 3, self.rng)
         self.state = result.state.astype(np.float32)
         return self.state, {"failure_type": self.current_failure_type}
@@ -45,13 +48,17 @@ class NeuroShieldEnv(gym.Env):
             raise RuntimeError("Environment must be reset before stepping.")
 
         result = simulate_action(self.current_failure_type, int(action), self.rng)
-        mttr_norm = result.mttr / 12.4
-        reward = 0.5 * (1.0 - mttr_norm) + 0.3 * float(result.success) - 0.2 * result.cost
+        baseline_mttr = BASELINE_MTTR_MINUTES.get(self.current_failure_type, 12.4)
+        reward = (
+            0.6 * (1.0 - result.mttr / baseline_mttr)
+            + 0.3 * float(result.success)
+            - 0.1 * result.cost
+        )
         info = {
             "failure_type": self.current_failure_type,
             "mttr": result.mttr,
+            "baseline_mttr": baseline_mttr,
             "action_taken": int(action),
-            "success": result.success,
         }
         self.state = result.state.astype(np.float32)
         self.steps += 1

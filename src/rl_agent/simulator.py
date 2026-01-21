@@ -7,20 +7,36 @@ from typing import Dict, Tuple
 import random
 import numpy as np
 
-FAILURE_TYPES = ["OOM", "FlakyTest", "Dependency", "Healthy"]
+FAILURE_TYPES = [
+    "OOM",
+    "FlakyTest",
+    "DependencyConflict",
+    "NetworkLatency",
+    "Healthy",
+]
 
 BASELINE_MTTR_MINUTES: Dict[str, float] = {
     "OOM": 14.2,
     "FlakyTest": 8.5,
-    "Dependency": 15.1,
-    "Healthy": 2.0,
+    "DependencyConflict": 15.1,
+    "NetworkLatency": 11.3,
+    "Healthy": 0.5,
 }
 
-ACTION_MTTR_MINUTES: Dict[Tuple[str, int], float] = {
-    ("OOM", 1): 7.5,
-    ("FlakyTest", 0): 4.3,
-    ("Dependency", 2): 9.8,
-    ("Healthy", 3): 2.0,
+OPTIMAL_ACTION: Dict[str, int] = {
+    "OOM": 1,
+    "FlakyTest": 0,
+    "DependencyConflict": 2,
+    "NetworkLatency": 0,
+    "Healthy": 3,
+}
+
+OPTIMAL_MTTR_MINUTES: Dict[str, float] = {
+    "OOM": 7.5,
+    "FlakyTest": 4.3,
+    "DependencyConflict": 9.8,
+    "NetworkLatency": 6.2,
+    "Healthy": 0.5,
 }
 
 
@@ -47,6 +63,21 @@ def sample_state(rng: random.Random) -> np.ndarray:
     return np.array(values, dtype=np.float32)
 
 
+def simulate_mttr(failure_type: str, action: int) -> float:
+    """Return MTTR (minutes) based on optimal action table.
+
+    Args:
+        failure_type: Failure category.
+        action: Discrete action id.
+
+    Returns:
+        MTTR in minutes. Optimal action yields optimal MTTR; otherwise baseline.
+    """
+    baseline = BASELINE_MTTR_MINUTES.get(failure_type, 12.4)
+    optimal = OPTIMAL_MTTR_MINUTES.get(failure_type, baseline)
+    return optimal if action == OPTIMAL_ACTION.get(failure_type, 3) else baseline
+
+
 def simulate_action(failure_type: str, action: int, rng: random.Random) -> SimulationResult:
     """Simulate action outcome for a given failure type.
 
@@ -61,8 +92,9 @@ def simulate_action(failure_type: str, action: int, rng: random.Random) -> Simul
         SimulationResult with success flag, MTTR (minutes), cost, and state.
     """
     baseline = BASELINE_MTTR_MINUTES.get(failure_type, 12.4)
-    mttr = ACTION_MTTR_MINUTES.get((failure_type, action), baseline)
-    success = (failure_type, action) in ACTION_MTTR_MINUTES or failure_type == "Healthy"
+    optimal = OPTIMAL_MTTR_MINUTES.get(failure_type, baseline)
+    mttr = simulate_mttr(failure_type, action)
+    success = float(mttr <= (optimal + 1.0)) == 1.0
     cost = 1.0 if action in (1, 2) else 0.0
     state = sample_state(rng)
 
