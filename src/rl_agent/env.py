@@ -11,7 +11,7 @@ from gymnasium import spaces
 from .simulator import FAILURE_TYPES, simulate_action
 
 
-class CICDEnv(gym.Env):
+class NeuroShieldEnv(gym.Env):
     """Custom environment for CI/CD recovery action selection."""
 
     metadata = {"render_modes": []}
@@ -51,6 +51,7 @@ class CICDEnv(gym.Env):
             "failure_type": self.current_failure_type,
             "mttr": result.mttr,
             "action_taken": int(action),
+            "success": result.success,
         }
         self.state = result.state.astype(np.float32)
         self.steps += 1
@@ -64,3 +65,7 @@ class CICDEnv(gym.Env):
             print("Environment not initialized.")
         else:
             print(f"Failure: {self.current_failure_type} | Step: {self.steps}")
+
+
+# Backwards-compatible alias
+CICDEnv = NeuroShieldEnv

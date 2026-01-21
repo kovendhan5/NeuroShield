@@ -1,5 +1,5 @@
 """RL agent module for NeuroShield."""
 
-from .env import CICDEnv
+from .env import NeuroShieldEnv
 
-__all__ = ["CICDEnv"]
+__all__ = ["NeuroShieldEnv"]
