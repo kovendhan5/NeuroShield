@@ -28,6 +28,7 @@ class TelemetryData:
     jenkins_last_build_status: Optional[str] = None
     jenkins_last_build_duration: Optional[float] = None
     jenkins_queue_length: Optional[int] = None
+    jenkins_last_build_log: Optional[str] = None
     prometheus_cpu_usage: Optional[float] = None
     prometheus_memory_usage: Optional[float] = None
     prometheus_pod_count: Optional[int] = None
@@ -91,6 +92,28 @@ class JenkinsPoll:
             return len(data.get('items', []))
         except Exception as e:
             logger.warning(f"Failed to fetch Jenkins queue: {e}")
+            return None
+
+    def get_last_build_log(self, job_name: str, max_chars: int = 2000) -> Optional[str]:
+        """Fetch the last build console log (truncated).
+
+        Args:
+            job_name: Jenkins job name.
+            max_chars: Maximum number of characters to return.
+
+        Returns:
+            Log text or None on error.
+        """
+        try:
+            url = f"{self.jenkins_url}/job/{job_name}/lastBuild/consoleText"
+            response = self.session.get(url, timeout=5)
+            response.raise_for_status()
+            text = response.text or ""
+            if len(text) > max_chars:
+                text = text[-max_chars:]
+            return text.replace("\r\n", "\n")
+        except Exception as e:
+            logger.warning(f"Failed to fetch Jenkins build log for {job_name}: {e}")
             return None
 
 
@@ -175,7 +198,7 @@ class TelemetryCollector:
         self,
         jenkins_url: str,
         prometheus_url: str,
-        output_csv: str = "telemetry.csv",
+        output_csv: str = "data/telemetry.csv",
         poll_interval: int = 10,
         jenkins_job: str = "default-job",
         username: str = None,
@@ -226,6 +249,7 @@ class TelemetryCollector:
         # Fetch Jenkins data
         jenkins_build = self.jenkins.get_last_build_status(self.jenkins_job)
         jenkins_queue = self.jenkins.get_queue_length()
+        jenkins_log = self.jenkins.get_last_build_log(self.jenkins_job)
         
         # Fetch Prometheus data
         cpu_usage = self.prometheus.get_cpu_usage()
@@ -238,6 +262,7 @@ class TelemetryCollector:
             jenkins_last_build_status=jenkins_build['status'] if jenkins_build else None,
             jenkins_last_build_duration=jenkins_build['duration_ms'] if jenkins_build else None,
             jenkins_queue_length=jenkins_queue,
+            jenkins_last_build_log=jenkins_log,
             prometheus_cpu_usage=cpu_usage,
             prometheus_memory_usage=memory_usage,
             prometheus_pod_count=pod_count,

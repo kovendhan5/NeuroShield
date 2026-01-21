@@ -19,7 +19,7 @@ JENKINS_JOB = os.getenv('JENKINS_JOB', 'build-pipeline')
 PROMETHEUS_URL = os.getenv('PROMETHEUS_URL', 'http://localhost:9090')
 
 # Telemetry Configuration
-TELEMETRY_OUTPUT = os.getenv('TELEMETRY_OUTPUT', 'telemetry.csv')
+TELEMETRY_OUTPUT = os.getenv('TELEMETRY_OUTPUT', 'data/telemetry.csv')
 POLL_INTERVAL = int(os.getenv('POLL_INTERVAL', '10'))  # seconds
 
 # Logging Configuration

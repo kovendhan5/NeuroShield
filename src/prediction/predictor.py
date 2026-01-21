@@ -6,11 +6,13 @@ from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Union
 import numpy as np
 import pandas as pd
-from joblib import load
+import torch
 
 from .log_encoder import LogEncoder
+from .model import FailureClassifier
 
 TelemetryInput = Union[Mapping[str, Any], str, Path, None]
+_DEFAULT_PREDICTOR: FailurePredictor | None = None
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -97,7 +99,12 @@ class FailurePredictor:
         self.model_dir = Path(model_dir)
         self.encoder = LogEncoder(model_name=model_name, max_length=max_length)
         self.encoder.load_pca(self.model_dir / "log_pca.joblib")
-        self.classifier = load(self.model_dir / "failure_classifier.joblib")
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.classifier = FailureClassifier(input_dim=24)
+        state = torch.load(self.model_dir / "failure_predictor.pth", map_location=self.device)
+        self.classifier.load_state_dict(state)
+        self.classifier.to(self.device)
+        self.classifier.eval()
 
     def build_state_vector(
         self,
@@ -118,11 +125,7 @@ class FailurePredictor:
         telemetry_vec = telemetry_to_vector(telemetry_dict)
         return np.concatenate([log_embed.astype(np.float32), telemetry_vec], axis=0)
 
-    def predict(
-        self,
-        log_text: str,
-        telemetry: TelemetryInput = None,
-    ) -> tuple[float, np.ndarray]:
+    def predict(self, log_text: str, telemetry: TelemetryInput = None) -> float:
         """Predict failure probability.
 
         Args:
@@ -130,8 +133,40 @@ class FailurePredictor:
             telemetry: Telemetry dict or CSV path.
 
         Returns:
-            Tuple of (failure_prob, state_vector).
+            Failure probability between 0 and 1.
         """
         state_vector = self.build_state_vector(log_text, telemetry)
-        prob = float(self.classifier.predict_proba([state_vector])[0][1])
-        return prob, state_vector
+        tensor = torch.tensor(state_vector, dtype=torch.float32, device=self.device).unsqueeze(0)
+        with torch.no_grad():
+            logits = self.classifier(tensor).squeeze(0)
+            prob = torch.sigmoid(logits).item()
+        return float(prob)
+
+    def predict_with_state(
+        self,
+        log_text: str,
+        telemetry: TelemetryInput = None,
+    ) -> tuple[float, np.ndarray]:
+        """Predict failure probability and return state vector."""
+        state_vector = self.build_state_vector(log_text, telemetry)
+        tensor = torch.tensor(state_vector, dtype=torch.float32, device=self.device).unsqueeze(0)
+        with torch.no_grad():
+            logits = self.classifier(tensor).squeeze(0)
+            prob = torch.sigmoid(logits).item()
+        return float(prob), state_vector
+
+
+def predict(log_text: str, telemetry: TelemetryInput = None) -> float:
+    """Module-level helper for quick prediction.
+
+    Args:
+        log_text: Jenkins log text.
+        telemetry: Telemetry dict or CSV path.
+
+    Returns:
+        Failure probability between 0 and 1.
+    """
+    global _DEFAULT_PREDICTOR
+    if _DEFAULT_PREDICTOR is None:
+        _DEFAULT_PREDICTOR = FailurePredictor()
+    return _DEFAULT_PREDICTOR.predict(log_text, telemetry)

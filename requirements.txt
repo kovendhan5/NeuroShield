@@ -1,11 +1,11 @@
 # Telemetry & API Polling
 requests>=2.31.0
 
-# ML & RL (upcoming modules)
+# ML & RL
 torch>=2.0.0
 transformers>=4.35.0
-ray[rllib]>=2.8.0
 gymnasium>=0.29.0
+stable-baselines3>=2.2.0
 scikit-learn>=1.3.0
 
 # Dashboard & Visualization
