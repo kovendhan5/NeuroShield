@@ -242,13 +242,6 @@ MIT License - see [LICENSE](LICENSE) file for details.
 - Ray RLlib and Hugging Face Transformers communities
 - Research inspiration from "AIOps-Driven Self-Healing Pipelines"
 
-## 📬 Contact
-
-**KOVENDHAN P**
-- Portfolio: [Your Portfolio URL]
-- LinkedIn: [Your LinkedIn]
-- Email: [Your Email]
-
 ---
 
 **NeuroShield** – Building the future of resilient, intelligent DevOps. 🛡️🔥
