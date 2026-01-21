@@ -3,23 +3,24 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict
+from typing import Dict, Tuple
 import random
+import numpy as np
 
-FAILURE_MTTR: Dict[str, float] = {
-    "oom": 420.0,
-    "flaky_test": 300.0,
-    "network_timeout": 240.0,
-    "config_error": 360.0,
-    "disk_full": 480.0,
-    "healthy": 60.0,
+FAILURE_TYPES = ["OOM", "FlakyTest", "Dependency", "Healthy"]
+
+BASELINE_MTTR_MINUTES: Dict[str, float] = {
+    "OOM": 14.2,
+    "FlakyTest": 8.5,
+    "Dependency": 15.1,
+    "Healthy": 2.0,
 }
 
-ACTION_COST: Dict[int, float] = {
-    0: 0.1,  # Retry
-    1: 0.25,  # Scale pods
-    2: 0.2,  # Rollback
-    3: 0.0,  # No-op
+ACTION_MTTR_MINUTES: Dict[Tuple[str, int], float] = {
+    ("OOM", 1): 7.5,
+    ("FlakyTest", 0): 4.3,
+    ("Dependency", 2): 9.8,
+    ("Healthy", 3): 2.0,
 }
 
 
@@ -30,58 +31,39 @@ class SimulationResult:
     success: bool
     mttr: float
     cost: float
+    state: np.ndarray
+
+
+def sample_state(rng: random.Random) -> np.ndarray:
+    """Generate a synthetic 24D state vector.
+
+    Args:
+        rng: Random generator.
+
+    Returns:
+        24D float32 vector.
+    """
+    values = [rng.normalvariate(0.0, 1.0) for _ in range(24)]
+    return np.array(values, dtype=np.float32)
 
 
 def simulate_action(failure_type: str, action: int, rng: random.Random) -> SimulationResult:
     """Simulate action outcome for a given failure type.
 
+    Deterministic MTTR values based on paper Table 1.
+
     Args:
-        failure_type: Failure category or healthy.
+        failure_type: Failure category or Healthy.
         action: Discrete action id.
         rng: Random generator.
 
     Returns:
-        SimulationResult with success flag, MTTR, and cost.
+        SimulationResult with success flag, MTTR (minutes), cost, and state.
     """
-    base_mttr = FAILURE_MTTR.get(failure_type, 300.0)
-    cost = ACTION_COST.get(action, 0.0)
+    baseline = BASELINE_MTTR_MINUTES.get(failure_type, 12.4)
+    mttr = ACTION_MTTR_MINUTES.get((failure_type, action), baseline)
+    success = (failure_type, action) in ACTION_MTTR_MINUTES or failure_type == "Healthy"
+    cost = 1.0 if action in (1, 2) else 0.0
+    state = sample_state(rng)
 
-    if failure_type == "healthy":
-        return SimulationResult(success=True, mttr=base_mttr, cost=cost)
-
-    success_prob = 0.6
-    mttr = base_mttr
-
-    if action == 0:  # Retry
-        if failure_type == "flaky_test":
-            success_prob = 0.8
-            mttr *= 0.7
-        elif failure_type == "network_timeout":
-            success_prob = 0.65
-            mttr *= 0.85
-        else:
-            success_prob = 0.45
-            mttr *= 1.05
-    elif action == 1:  # Scale pods
-        if failure_type == "oom":
-            success_prob = 0.85
-            mttr *= 0.6
-        else:
-            success_prob = 0.55
-            mttr *= 0.9
-    elif action == 2:  # Rollback
-        if failure_type in {"config_error", "disk_full"}:
-            success_prob = 0.8
-            mttr *= 0.75
-        else:
-            success_prob = 0.5
-            mttr *= 0.95
-    elif action == 3:  # No-op
-        success_prob = 0.2
-        mttr *= 1.2
-
-    success = rng.random() < success_prob
-    if not success:
-        mttr *= 1.2
-
-    return SimulationResult(success=success, mttr=mttr, cost=cost)
+    return SimulationResult(success=success, mttr=mttr, cost=cost, state=state)
