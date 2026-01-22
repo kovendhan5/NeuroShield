@@ -1,0 +1,20 @@
+## Secrets / environment
+.env
+.env.*
+!.env.example
+*.local
+
+## Keys / certificates
+*.key
+*.pem
+*.pfx
+*.p12
+*.jks
+*.keystore
+
+## Common secret files
+secrets*
+*secret*
+.secrets/
+*.sqlite
+*.db
