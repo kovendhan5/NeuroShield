@@ -1,183 +1,264 @@
-"""
-NeuroShield Orchestrator - Real-time CI/CD Monitoring
-Connects to real Jenkins and monitors actual builds
-"""
+"""NeuroShield Orchestrator - Real-time CI/CD Monitoring."""
 
+from __future__ import annotations
+
+import logging
 import os
+import subprocess
 import time
-import requests
-import pandas as pd
-import numpy as np
-from datetime import datetime
-from typing import Dict, Tuple, Optional
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Dict, Optional, Tuple
 
-# Import your trained models
-from src.prediction.predictor import NeuroShieldPredictor
+import numpy as np
+import requests
+from dotenv import load_dotenv
 from stable_baselines3 import PPO
 
+from src.prediction.predictor import FailurePredictor
 
-def get_latest_build_info(jenkins_url: str, job_name: str, username: str, token: str) -> Dict:
-    """Get the latest build information from Jenkins"""
+ACTION_NAMES: Dict[int, str] = {
+    0: "Retry",
+    1: "Scale Pods",
+    2: "Rollback",
+    3: "No-op",
+}
+
+
+@dataclass
+class BuildInfo:
+    number: int
+    timestamp_ms: int
+    duration_ms: int
+    result: str
+    url: str
+
+    @property
+    def end_time_ms(self) -> int:
+        return int(self.timestamp_ms + self.duration_ms)
+
+
+def _setup_logging() -> None:
+    log_dir = Path("logs")
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / "orchestrator_audit.log"
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s",
+        handlers=[logging.FileHandler(log_path, encoding="utf-8"), logging.StreamHandler()],
+    )
+
+
+def _load_env() -> None:
+    load_dotenv(override=False)
+
+
+def _required_env(name: str) -> str:
+    value = os.getenv(name)
+    if not value:
+        raise RuntimeError(f"Missing required environment variable: {name}")
+    return value
+
+
+def get_latest_build_info(jenkins_url: str, job_name: str, username: str, token: str) -> Optional[BuildInfo]:
+    """Get the latest build information from Jenkins."""
     url = f"{jenkins_url}/job/{job_name}/lastBuild/api/json"
     auth = (username, token)
 
     try:
-        response = requests.get(url, auth=auth)
+        response = requests.get(url, auth=auth, timeout=15)
         if response.status_code == 200:
             build_data = response.json()
-            return {
-                "number": build_data["number"],
-                "timestamp": build_data["timestamp"],
-                "duration": build_data["duration"],
-                "result": build_data.get("result", "UNKNOWN"),
-                "url": build_data["url"],
-            }
-        else:
-            print(f"Error fetching build info: {response.status_code}")
-            return {}
-    except Exception as e:
-        print(f"Exception in get_latest_build_info: {e}")
-        return {}
+            result = build_data.get("result") or "RUNNING"
+            return BuildInfo(
+                number=int(build_data["number"]),
+                timestamp_ms=int(build_data["timestamp"]),
+                duration_ms=int(build_data.get("duration") or 0),
+                result=str(result),
+                url=str(build_data.get("url") or ""),
+            )
+        logging.warning("Error fetching build info: %s", response.status_code)
+        return None
+    except Exception as exc:
+        logging.exception("Exception in get_latest_build_info: %s", exc)
+        return None
 
 
 def get_build_log(jenkins_url: str, job_name: str, build_number: int, username: str, token: str) -> str:
-    """Get the console log for a specific build"""
+    """Get the console log for a specific build."""
     url = f"{jenkins_url}/job/{job_name}/{build_number}/consoleText"
     auth = (username, token)
 
     try:
-        response = requests.get(url, auth=auth)
+        response = requests.get(url, auth=auth, timeout=30)
         if response.status_code == 200:
             return response.text
-        else:
-            print(f"Error fetching build log: {response.status_code}")
-            return ""
-    except Exception as e:
-        print(f"Exception in get_build_log: {e}")
+        logging.warning("Error fetching build log: %s", response.status_code)
+        return ""
+    except Exception as exc:
+        logging.exception("Exception in get_build_log: %s", exc)
         return ""
 
 
-def execute_healing_action(action_id: int, context: Dict) -> bool:
-    """Execute the healing action based on PPO decision"""
+def detect_failure_pattern(log_text: str) -> Tuple[str, Optional[int]]:
+    """Detect known failure patterns to bias healing actions."""
+    text = log_text.lower()
+    if "outofmemoryerror" in text or "oom" in text or "java heap space" in text:
+        return "OOM", 1
+    if "flaky" in text or "intermittent" in text or "retry" in text:
+        return "FlakyTest", 0
+    if "dependency" in text or "resolution failed" in text or "rollback" in text:
+        return "Dependency", 2
+    if "timeout" in text or "timed out" in text:
+        return "Timeout", 0
+    return "Unknown", None
+
+
+def execute_healing_action(action_id: int, context: Dict[str, str]) -> bool:
+    """Execute the healing action based on PPO decision."""
     try:
         if action_id == 0:  # Retry
-            print(f"Executing: Retry build #{context.get('build_number', 'unknown')}")
-            # Call Jenkins API to retry
-            jenkins_url = os.getenv("JENKINS_URL")
-            job_name = os.getenv("JENKINS_JOB")
-            username = os.getenv("JENKINS_USERNAME")
-            token = os.getenv("JENKINS_TOKEN")
-
+            logging.info("Executing action: Retry build #%s", context.get("build_number", "unknown"))
+            jenkins_url = _required_env("JENKINS_URL")
+            job_name = _required_env("JENKINS_JOB")
+            username = _required_env("JENKINS_USERNAME")
+            token = _required_env("JENKINS_TOKEN")
             retry_url = f"{jenkins_url}/job/{job_name}/build"
-            auth = (username, token)
-            response = requests.post(retry_url, auth=auth)
-            return response.status_code == 201
+            response = requests.post(retry_url, auth=(username, token), timeout=15)
+            return response.status_code in {200, 201, 202}
 
-        elif action_id == 1:  # Scale pods
-            print(f"Executing: Scale pods for {context.get('affected_service', 'unknown')}")
-            # Execute kubectl scale command
-            import subprocess
-
+        if action_id == 1:  # Scale pods
             service = context.get("affected_service", "carts")
-            cmd = f"kubectl scale deploy/{service} --replicas=3 -n sock-shop"
-            result = subprocess.run(cmd.split(), capture_output=True, text=True)
+            logging.info("Executing action: Scale pods for %s", service)
+            cmd = ["kubectl", "scale", f"deploy/{service}", "--replicas=3", "-n", "sock-shop"]
+            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                logging.error("kubectl scale failed: %s", result.stderr.strip())
             return result.returncode == 0
 
-        elif action_id == 2:  # Rollback
-            print("Executing: Rollback deployment")
-            # Execute rollback command
-            return True  # Placeholder
+        if action_id == 2:  # Rollback
+            service = context.get("affected_service", "carts")
+            logging.info("Executing action: Rollback deployment for %s", service)
+            cmd = ["kubectl", "rollout", "undo", f"deploy/{service}", "-n", "sock-shop"]
+            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                logging.error("kubectl rollback failed: %s", result.stderr.strip())
+            return result.returncode == 0
 
-        elif action_id == 3:  # No-op
-            print("Executing: No operation")
+        if action_id == 3:  # No-op
+            logging.info("Executing action: No operation")
             return True
 
+        logging.warning("Unknown action id: %s", action_id)
         return False
-    except Exception as e:
-        print(f"Error executing action {action_id}: {e}")
+    except Exception as exc:
+        logging.exception("Error executing action %s: %s", action_id, exc)
         return False
 
 
-def main():
-    print("🚀 Starting NeuroShield Real-Time Orchestrator...")
+def _is_failure(result: str) -> bool:
+    return result.upper() in {"FAILURE", "UNSTABLE", "ABORTED"}
 
-    # Load trained models
-    predictor = NeuroShieldPredictor()
-    # Load PPO model
-    model = PPO.load("models/ppo_policy.zip")
 
-    jenkins_url = os.getenv("JENKINS_URL")
-    job_name = os.getenv("JENKINS_JOB")
-    username = os.getenv("JENKINS_USERNAME")
-    token = os.getenv("JENKINS_TOKEN")
+def main() -> None:
+    _setup_logging()
+    _load_env()
+    logging.info("Starting NeuroShield Real-Time Orchestrator")
 
-    print(f"Connecting to Jenkins: {jenkins_url}")
-    print(f"Monitoring job: {job_name}")
+    jenkins_url = _required_env("JENKINS_URL")
+    job_name = _required_env("JENKINS_JOB")
+    username = _required_env("JENKINS_USERNAME")
+    token = _required_env("JENKINS_TOKEN")
+    poll_interval = int(os.getenv("POLL_INTERVAL", "10"))
+    telemetry_path = os.getenv("TELEMETRY_OUTPUT")
 
-    # Initialize metrics
-    baseline_mttr = 0
-    neuroshield_mttr = 0
+    logging.info("Connecting to Jenkins: %s", jenkins_url)
+    logging.info("Monitoring job: %s", job_name)
+
+    predictor = FailurePredictor(model_dir="models")
+    policy = PPO.load("models/ppo_policy.zip")
+
+    baseline_mttr_min = 0.0
+    neuro_mttr_min = 0.0
     total_failures = 0
     successful_interventions = 0
 
-    last_build_number = None
+    last_build_number: Optional[int] = None
+    pending_intervention_start_ms: Optional[int] = None
 
     try:
         while True:
-            # Get latest build info
-            build_info = get_latest_build_info(jenkins_url, job_name, username, token)
+            build = get_latest_build_info(jenkins_url, job_name, username, token)
 
-            if build_info and build_info.get("number") != last_build_number:
-                print(f"\n🔍 New build detected: #{build_info['number']}")
+            if build and build.number != last_build_number:
+                logging.info("New build detected: #%s (%s)", build.number, build.result)
+                log_text = get_build_log(jenkins_url, job_name, build.number, username, token)
 
-                # Get build log
-                log_content = get_build_log(jenkins_url, job_name, build_info["number"], username, token)
+                if log_text:
+                    failure_prob, state_vector = predictor.predict_with_state(log_text, telemetry_path)
+                    pattern, pattern_action = detect_failure_pattern(log_text)
+                    logging.info(
+                        "Failure probability: %.3f | pattern=%s | build_url=%s",
+                        failure_prob,
+                        pattern,
+                        build.url,
+                    )
 
-                if log_content:
-                    print("📄 Analyzing build log...")
+                    if failure_prob > 0.5:
+                        action, _ = policy.predict(np.asarray(state_vector, dtype=np.float32), deterministic=True)
+                        action_id = int(action)
+                        if pattern_action is not None:
+                            action_id = pattern_action
+                        logging.info("NeuroShield decision: %s", ACTION_NAMES.get(action_id, str(action_id)))
 
-                    # Predict failure probability
-                    failure_prob = predictor.predict_failure_probability(log_content)
-
-                    if failure_prob > 0.5:  # Threshold for intervention
-                        print(f"⚠️  High failure probability detected: {failure_prob:.2f}")
-
-                        # Get state vector for RL agent
-                        state_vector = predictor.encode_log(log_content)  # Assuming this method exists
-
-                        # Use PPO agent to decide action
-                        action_id, _states = model.predict(state_vector.reshape(1, -1), deterministic=True)
-
-                        action_names = ["Retry", "Scale Pods", "Rollback", "No-op"]
-                        print(f"🤖 NeuroShield recommends: {action_names[action_id[0]]}")
-
-                        # Execute healing action
                         success = execute_healing_action(
-                            action_id[0],
+                            action_id,
                             {
-                                "build_number": build_info["number"],
-                                "affected_service": "carts",  # Could be inferred from log
+                                "build_number": str(build.number),
+                                "affected_service": os.getenv("AFFECTED_SERVICE", "carts"),
                             },
                         )
-
                         if success:
-                            print("✅ Action executed successfully")
                             successful_interventions += 1
+                            pending_intervention_start_ms = build.end_time_ms
+                            logging.info("Action executed successfully")
                         else:
-                            print("❌ Action execution failed")
-
+                            logging.warning("Action execution failed")
                     else:
-                        print(f"✅ Build looks healthy (failure prob: {failure_prob:.2f})")
+                        logging.info("Build looks healthy; no intervention")
 
-                last_build_number = build_info["number"]
+                if _is_failure(build.result):
+                    total_failures += 1
+                    baseline_mttr_min += build.duration_ms / 60000.0
+                    if pending_intervention_start_ms is None:
+                        neuro_mttr_min += build.duration_ms / 60000.0
+                elif build.result.upper() == "SUCCESS" and pending_intervention_start_ms is not None:
+                    recovery_mttr = max(build.end_time_ms - pending_intervention_start_ms, 0) / 60000.0
+                    neuro_mttr_min += recovery_mttr
+                    pending_intervention_start_ms = None
 
-            # Wait before checking again
-            time.sleep(int(os.getenv("POLL_INTERVAL", 10)))
+                if total_failures > 0:
+                    mttr_reduction = (
+                        (baseline_mttr_min - neuro_mttr_min) / baseline_mttr_min * 100.0
+                        if baseline_mttr_min > 0
+                        else 0.0
+                    )
+                    logging.info(
+                        "MTTR baseline=%.2f min | neuro=%.2f min | reduction=%.1f%% | interventions=%s",
+                        baseline_mttr_min,
+                        neuro_mttr_min,
+                        mttr_reduction,
+                        successful_interventions,
+                    )
+
+                last_build_number = build.number
+
+            time.sleep(poll_interval)
 
     except KeyboardInterrupt:
-        print("\n🛑 NeuroShield orchestrator stopped by user")
-    except Exception as e:
-        print(f"\n💥 Error in orchestrator: {e}")
+        logging.info("Orchestrator stopped by user")
+    except Exception as exc:
+        logging.exception("Error in orchestrator: %s", exc)
 
 
 if __name__ == "__main__":
