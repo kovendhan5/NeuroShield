@@ -114,6 +114,80 @@ def detect_failure_pattern(log_text: str) -> Tuple[str, Optional[int]]:
     return "Unknown", None
 
 
+def _parse_kubectl_top_nodes(output: str) -> Tuple[float, float]:
+    """Parse `kubectl top nodes` output and return avg CPU/memory usage.
+
+    Returns:
+        (cpu_millicores_avg, memory_mib_avg)
+    """
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    if len(lines) < 2:
+        return 0.0, 0.0
+    cpu_vals: list[float] = []
+    mem_vals: list[float] = []
+    for line in lines[1:]:
+        parts = line.split()
+        if len(parts) < 5:
+            continue
+        cpu_raw = parts[1]
+        mem_raw = parts[3]
+        if cpu_raw.endswith("m"):
+            cpu_vals.append(float(cpu_raw[:-1]))
+        elif cpu_raw.isdigit():
+            cpu_vals.append(float(cpu_raw) * 1000.0)
+        if mem_raw.endswith("Mi"):
+            mem_vals.append(float(mem_raw[:-2]))
+        elif mem_raw.endswith("Gi"):
+            mem_vals.append(float(mem_raw[:-2]) * 1024.0)
+    if not cpu_vals or not mem_vals:
+        return 0.0, 0.0
+    return float(np.mean(cpu_vals)), float(np.mean(mem_vals))
+
+
+def _get_k8s_resource_metrics(namespace: str) -> Dict[str, float]:
+    """Fetch basic resource metrics from Kubernetes via kubectl.
+
+    Returns defaults on failure.
+    """
+    metrics = {
+        "cpu_millicores_avg": 0.0,
+        "memory_mib_avg": 0.0,
+        "pod_count": 0.0,
+        "error_rate": 0.0,
+    }
+    try:
+        top_nodes = subprocess.run(
+            ["kubectl", "top", "nodes"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if top_nodes.returncode == 0:
+            cpu_avg, mem_avg = _parse_kubectl_top_nodes(top_nodes.stdout)
+            metrics["cpu_millicores_avg"] = cpu_avg
+            metrics["memory_mib_avg"] = mem_avg
+        else:
+            logging.debug("kubectl top nodes failed: %s", top_nodes.stderr.strip())
+    except Exception as exc:
+        logging.debug("kubectl top nodes exception: %s", exc)
+
+    try:
+        pods = subprocess.run(
+            ["kubectl", "get", "pods", "-n", namespace, "--no-headers"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if pods.returncode == 0:
+            metrics["pod_count"] = float(len([line for line in pods.stdout.splitlines() if line.strip()]))
+        else:
+            logging.debug("kubectl get pods failed: %s", pods.stderr.strip())
+    except Exception as exc:
+        logging.debug("kubectl get pods exception: %s", exc)
+
+    return metrics
+
+
 def execute_healing_action(action_id: int, context: Dict[str, str]) -> bool:
     """Execute the healing action based on PPO decision."""
     try:
@@ -170,7 +244,7 @@ def main() -> None:
     username = _required_env("JENKINS_USERNAME")
     token = _required_env("JENKINS_TOKEN")
     poll_interval = int(os.getenv("POLL_INTERVAL", "10"))
-    telemetry_path = os.getenv("TELEMETRY_OUTPUT")
+    namespace = os.getenv("K8S_NAMESPACE", "sock-shop")
 
     logging.info("Connecting to Jenkins: %s", jenkins_url)
     logging.info("Monitoring job: %s", job_name)
@@ -195,7 +269,18 @@ def main() -> None:
                 log_text = get_build_log(jenkins_url, job_name, build.number, username, token)
 
                 if log_text:
-                    failure_prob, state_vector = predictor.predict_with_state(log_text, telemetry_path)
+                    resource_metrics = _get_k8s_resource_metrics(namespace)
+                    telemetry_dict = {
+                        "jenkins_last_build_status": build.result,
+                        "jenkins_last_build_duration": build.duration_ms,
+                        "jenkins_queue_length": 0,
+                        "prometheus_cpu_usage": resource_metrics["cpu_millicores_avg"],
+                        "prometheus_memory_usage": resource_metrics["memory_mib_avg"],
+                        "prometheus_pod_count": resource_metrics["pod_count"],
+                        "prometheus_error_rate": resource_metrics["error_rate"],
+                    }
+
+                    failure_prob, state_vector = predictor.predict_with_state(log_text, telemetry_dict)
                     pattern, pattern_action = detect_failure_pattern(log_text)
                     logging.info(
                         "Failure probability: %.3f | pattern=%s | build_url=%s",
