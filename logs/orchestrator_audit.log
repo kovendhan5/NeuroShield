@@ -1,0 +1,47 @@
+2026-01-22 14:47:27,024 - INFO - Starting NeuroShield Real-Time Orchestrator
+2026-01-22 14:47:27,024 - INFO - Connecting to Jenkins: http://127.0.0.1:49195/
+2026-01-22 14:47:27,024 - INFO - Monitoring job: sock-shop-pipeline
+2026-01-22 14:47:29,539 - INFO - New build detected: #1 (SUCCESS)
+2026-01-22 14:47:29,608 - ERROR - Error in orchestrator: [Errno 2] No such file or directory: 'data\\minikube_telemetry.csv'
+Traceback (most recent call last):
+  File "K:\Devops\NeuroShield\src\orchestrator\main.py", line 198, in main
+    failure_prob, state_vector = predictor.predict_with_state(log_text, telemetry_path)
+                                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "K:\Devops\NeuroShield\src\prediction\predictor.py", line 151, in predict_with_state
+    state_vector = self.build_state_vector(log_text, telemetry)
+  File "K:\Devops\NeuroShield\src\prediction\predictor.py", line 123, in build_state_vector
+    telemetry_dict = resolve_telemetry(telemetry)
+  File "K:\Devops\NeuroShield\src\prediction\predictor.py", line 79, in resolve_telemetry
+    return _load_latest_telemetry(Path(telemetry_input))
+  File "K:\Devops\NeuroShield\src\prediction\predictor.py", line 68, in _load_latest_telemetry
+    df = pd.read_csv(csv_path)
+  File "K:\Devops\NeuroShield\venv\Lib\site-packages\pandas\io\parsers\readers.py", line 1026, in read_csv
+    return _read(filepath_or_buffer, kwds)
+  File "K:\Devops\NeuroShield\venv\Lib\site-packages\pandas\io\parsers\readers.py", line 620, in _read
+    parser = TextFileReader(filepath_or_buffer, **kwds)
+  File "K:\Devops\NeuroShield\venv\Lib\site-packages\pandas\io\parsers\readers.py", line 1620, in __init__
+    self._engine = self._make_engine(f, self.engine)
+                   ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^
+  File "K:\Devops\NeuroShield\venv\Lib\site-packages\pandas\io\parsers\readers.py", line 1880, in _make_engine
+    self.handles = get_handle(
+                   ~~~~~~~~~~^
+        f,
+        ^^
+    ...<6 lines>...
+        storage_options=self.options.get("storage_options", None),
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "K:\Devops\NeuroShield\venv\Lib\site-packages\pandas\io\common.py", line 873, in get_handle
+    handle = open(
+        handle,
+    ...<3 lines>...
+        newline="",
+    )
+FileNotFoundError: [Errno 2] No such file or directory: 'data\\minikube_telemetry.csv'
+2026-01-22 14:49:13,061 - INFO - Starting NeuroShield Real-Time Orchestrator
+2026-01-22 14:49:13,061 - INFO - Connecting to Jenkins: http://127.0.0.1:49195/
+2026-01-22 14:49:13,061 - INFO - Monitoring job: sock-shop-pipeline
+2026-01-22 14:49:15,517 - INFO - New build detected: #1 (SUCCESS)
+2026-01-22 14:49:15,858 - INFO - Failure probability: 0.102 | pattern=Unknown | build_url=http://127.0.0.1:49195/job/sock-shop-pipeline/1/
+2026-01-22 14:49:15,858 - INFO - Build looks healthy; no intervention
