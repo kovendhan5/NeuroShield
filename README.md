@@ -232,10 +232,6 @@ NeuroShield implements a simplified MVP version focusing on 4 core actions and ~
 
 This is a personal portfolio project, but feedback and suggestions are welcome! Feel free to open issues or reach out.
 
-## 📄 License
-
-MIT License - see [LICENSE](LICENSE) file for details.
-
 ## 🙏 Acknowledgments
 
 - Sock Shop microservices demo
