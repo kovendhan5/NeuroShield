@@ -37,21 +37,8 @@ spec:
           command: ["/bin/sh", "-c"]
           args:
             - >
-              python - <<'PY'
-              from flask import Flask, request
-              import os, sys
-              app = Flask(__name__)
-              @app.get("/")
-              def ok():
-                  return "ok\n"
-              @app.post("/fail")
-              def fail():
-                  sys.stderr.write("FAIL requested\n")
-                  sys.stderr.flush()
-                  os._exit(1)
-              if __name__ == "__main__":
-                  app.run(host="0.0.0.0", port=5000)
-              PY
+              python -m pip install --no-cache-dir flask &&
+              python -c "import os,sys; from flask import Flask; app=Flask(__name__); app.add_url_rule('/', 'ok', lambda: 'ok\\n'); app.add_url_rule('/fail','fail', lambda: (sys.stderr.write('FAIL requested\\n'), sys.stderr.flush(), os._exit(1)), methods=['POST']); app.run(host='0.0.0.0', port=5000)"
           ports:
             - containerPort: 5000
           resources:
