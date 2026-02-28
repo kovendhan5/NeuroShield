@@ -55,14 +55,32 @@ def main() -> int:
 </flow-definition>
 """
 
-    create_url = f"{jenkins_url}/createItem?name=neuroshield-test-job"
+    create_url = (
+      f"{jenkins_url}/createItem?name=neuroshield-test-job"
+      "&mode=org.jenkinsci.plugins.workflow.job.WorkflowJob"
+    )
     auth = HTTPBasicAuth(jenkins_user, jenkins_token)
 
-    files = {
-        "config.xml": ("config.xml", config_xml.encode("utf-8"), "application/xml"),
-    }
+    headers = {"Content-Type": "application/xml"}
+    crumb_resp = requests.get(
+      f"{jenkins_url}/crumbIssuer/api/json",
+      auth=auth,
+      timeout=10,
+    )
+    if crumb_resp.status_code == 200:
+      crumb_data = crumb_resp.json()
+      header_name = crumb_data.get("crumbRequestField")
+      crumb_value = crumb_data.get("crumb")
+      if header_name and crumb_value:
+        headers[header_name] = crumb_value
 
-    response = requests.post(create_url, auth=auth, files=files, timeout=20)
+    response = requests.post(
+      create_url,
+      auth=auth,
+      headers=headers,
+      data=config_xml.encode("utf-8"),
+      timeout=20,
+    )
 
     if response.status_code in (200, 201):
         print("Job created: neuroshield-test-job")
