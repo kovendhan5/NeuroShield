@@ -21,6 +21,9 @@ PROMETHEUS_URL = os.getenv('PROMETHEUS_URL', 'http://localhost:9090')
 # Telemetry Configuration
 TELEMETRY_OUTPUT = os.getenv('TELEMETRY_OUTPUT', 'data/telemetry.csv')
 POLL_INTERVAL = int(os.getenv('POLL_INTERVAL', '10'))  # seconds
+TELEMETRY_LOGS_ENABLED = os.getenv('TELEMETRY_LOGS_ENABLED', 'false').lower() in {
+	'1', 'true', 'yes', 'on'
+}
 
 # Logging Configuration
 LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')

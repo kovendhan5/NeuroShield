@@ -6,6 +6,7 @@ Polls Jenkins API and Prometheus metrics every 10s, saves to CSV.
 import time
 import csv
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Any, Optional
@@ -111,10 +112,28 @@ class JenkinsPoll:
             text = response.text or ""
             if len(text) > max_chars:
                 text = text[-max_chars:]
-            return text.replace("\r\n", "\n")
+            text = text.replace("\r\n", "\n")
+            return redact_sensitive(text)
         except Exception as e:
             logger.warning(f"Failed to fetch Jenkins build log for {job_name}: {e}")
             return None
+
+
+_SENSITIVE_PATTERNS = [
+    r"(?i)apikey\s*[:=]\s*[^\s]+",
+    r"(?i)token\s*[:=]\s*[^\s]+",
+    r"(?i)password\s*[:=]\s*[^\s]+",
+    r"(?i)secret\s*[:=]\s*[^\s]+",
+    r"(?i)bearer\s+[A-Za-z0-9\-._~+/]+=*",
+]
+
+
+def redact_sensitive(text: str) -> str:
+    """Redact common credential patterns from log text."""
+    redacted = text
+    for pattern in _SENSITIVE_PATTERNS:
+        redacted = re.sub(pattern, "[REDACTED]", redacted)
+    return redacted
 
 
 class PrometheusPoll:
@@ -202,7 +221,8 @@ class TelemetryCollector:
         poll_interval: int = 10,
         jenkins_job: str = "default-job",
         username: str = None,
-        token: str = None
+        token: str = None,
+        log_capture: bool = False
     ):
         """
         Initialize telemetry collector.
@@ -222,6 +242,7 @@ class TelemetryCollector:
         self.poll_interval = poll_interval
         self.jenkins_job = jenkins_job
         self.running = False
+        self.log_capture = log_capture
         
         # Initialize CSV with headers
         self._init_csv()
@@ -249,7 +270,9 @@ class TelemetryCollector:
         # Fetch Jenkins data
         jenkins_build = self.jenkins.get_last_build_status(self.jenkins_job)
         jenkins_queue = self.jenkins.get_queue_length()
-        jenkins_log = self.jenkins.get_last_build_log(self.jenkins_job)
+        jenkins_log = None
+        if self.log_capture:
+            jenkins_log = self.jenkins.get_last_build_log(self.jenkins_job)
         
         # Fetch Prometheus data
         cpu_usage = self.prometheus.get_cpu_usage()
