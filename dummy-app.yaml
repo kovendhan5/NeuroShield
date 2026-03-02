@@ -14,8 +14,10 @@ spec:
     spec:
       containers:
         - name: dummy-app
-          image: busybox:1.36
-          command: ["sh", "-c", "while true; do echo dummy-app running; sleep 30; done"]
+          image: neuroshield-dummy-app:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 5000
           resources:
             requests:
               cpu: 10m
