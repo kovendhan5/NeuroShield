@@ -191,6 +191,7 @@ def _get_k8s_resource_metrics(namespace: str) -> Dict[str, float]:
 def execute_healing_action(action_id: int, context: Dict[str, str]) -> bool:
     """Execute the healing action based on PPO decision."""
     try:
+        namespace = os.getenv("K8S_NAMESPACE", "sock-shop")
         if action_id == 0:  # Retry
             logging.info("Executing action: Retry build #%s", context.get("build_number", "unknown"))
             jenkins_url = _required_env("JENKINS_URL")
@@ -204,7 +205,7 @@ def execute_healing_action(action_id: int, context: Dict[str, str]) -> bool:
         if action_id == 1:  # Scale pods
             service = context.get("affected_service", "carts")
             logging.info("Executing action: Scale pods for %s", service)
-            cmd = ["kubectl", "scale", f"deploy/{service}", "--replicas=3", "-n", "sock-shop"]
+            cmd = ["kubectl", "scale", f"deploy/{service}", "--replicas=3", "-n", namespace]
             result = subprocess.run(cmd, capture_output=True, text=True, check=False)
             if result.returncode != 0:
                 logging.error("kubectl scale failed: %s", result.stderr.strip())
@@ -213,7 +214,7 @@ def execute_healing_action(action_id: int, context: Dict[str, str]) -> bool:
         if action_id == 2:  # Rollback
             service = context.get("affected_service", "carts")
             logging.info("Executing action: Rollback deployment for %s", service)
-            cmd = ["kubectl", "rollout", "undo", f"deploy/{service}", "-n", "sock-shop"]
+            cmd = ["kubectl", "rollout", "undo", f"deploy/{service}", "-n", namespace]
             result = subprocess.run(cmd, capture_output=True, text=True, check=False)
             if result.returncode != 0:
                 logging.error("kubectl rollback failed: %s", result.stderr.strip())
@@ -250,7 +251,11 @@ def main() -> None:
     logging.info("Monitoring job: %s", job_name)
 
     predictor = FailurePredictor(model_dir="models")
-    policy = PPO.load("models/ppo_policy.zip")
+    try:
+        policy = PPO.load("models/ppo_policy.zip")
+    except Exception as exc:
+        policy = None
+        logging.warning("PPO policy not loaded, falling back to Retry: %s", exc)
 
     baseline_mttr_min = 0.0
     neuro_mttr_min = 0.0
@@ -290,8 +295,11 @@ def main() -> None:
                     )
 
                     if failure_prob > 0.5:
-                        action, _ = policy.predict(np.asarray(state_vector, dtype=np.float32), deterministic=True)
-                        action_id = int(action)
+                        if policy is None:
+                            action_id = 0
+                        else:
+                            action, _ = policy.predict(np.asarray(state_vector, dtype=np.float32), deterministic=True)
+                            action_id = int(action)
                         if pattern_action is not None:
                             action_id = pattern_action
                         logging.info("NeuroShield decision: %s", ACTION_NAMES.get(action_id, str(action_id)))

@@ -16,7 +16,7 @@ sys.path.insert(0, str(project_root))
 from src.telemetry.collector import TelemetryCollector
 from src.telemetry.config import (
     JENKINS_URL, JENKINS_USERNAME, JENKINS_TOKEN, JENKINS_JOB,
-    PROMETHEUS_URL, TELEMETRY_OUTPUT, POLL_INTERVAL, LOG_LEVEL
+    PROMETHEUS_URL, TELEMETRY_OUTPUT, POLL_INTERVAL, LOG_LEVEL, TELEMETRY_LOGS_ENABLED
 )
 
 # Configure logging
@@ -97,7 +97,8 @@ Examples:
         poll_interval=args.interval,
         jenkins_job=args.jenkins_job,
         username=args.jenkins_username,
-        token=args.jenkins_token
+        token=args.jenkins_token,
+        log_capture=TELEMETRY_LOGS_ENABLED
     )
     
     try:
