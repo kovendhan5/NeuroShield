@@ -237,8 +237,3 @@ This is a personal portfolio project, but feedback and suggestions are welcome! 
 - Sock Shop microservices demo
 - Ray RLlib and Hugging Face Transformers communities
 - Research inspiration from "AIOps-Driven Self-Healing Pipelines"
-
----
-
-**NeuroShield** – Building the future of resilient, intelligent DevOps. 🛡️🔥
-
