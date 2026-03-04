@@ -1,5 +1,5 @@
 # NeuroShield — Project State Tracker
-> Last Updated: 2026-03-04 (rev 3)
+> Last Updated: 2026-03-04 (rev 4)
 > Overall Status: 🟡 IN PROGRESS
 
 ---
@@ -17,6 +17,7 @@
 - [x] **Config Unification** — `.env.example` has all variables. Orchestrator uses `K8S_NAMESPACE`, `AFFECTED_SERVICE`, `SCALE_REPLICAS` env vars. No hardcoded `sock-shop` or `carts`.
 - [x] **Prebuilt Dummy App Image** — Flask-based dummy app with Dockerfile, referenced in K8s manifests. (`infra/dummy-app/`)
 - [x] **Telemetry Unit Tests** — Tests for JenkinsPoll, PrometheusPoll, TelemetryCollector, TelemetryData. (`tests/test_telemetry.py`)
+- [x] **Streamlit Dashboard** — Human-in-the-loop AIOps dashboard with: failure-probability gauge, RL agent decision panel, SHAP feature importance, MTTR trend chart, failure-type breakdown pie, feedback approve/override/pause buttons, escalation review, sidebar controls. Auto-refreshes every 10s. (`src/dashboard/app.py`)
 
 ## 🔄 IN PROGRESS
 
@@ -24,7 +25,7 @@ _(All three previous high-severity items resolved — see rev 2 notes below.)_
 
 ## ❌ NOT STARTED
 
-- [ ] **Streamlit Dashboard** — Paper describes a real-time dashboard with MTTR charts, action history, failure heatmaps. No code exists. Needs: `src/dashboard/app.py` or similar.
+- [ ] **Streamlit Dashboard** — ~~Paper describes a real-time dashboard~~ **MOVED TO COMPLETED (rev 4)**.
 - [ ] **End-to-End Integration Tests** — No tests for prediction pipeline, RL training, or orchestrator loop. Needs: `tests/test_prediction.py`, `tests/test_rl_agent.py`, `tests/test_orchestrator.py`.
 - [ ] **Automated Local Setup Script** — No single command to spin up Minikube + Jenkins + Prometheus + dummy app + start telemetry. Needs: `scripts/setup_local.sh` or `Makefile` target.
 - [ ] **CI/CD Pipeline for NeuroShield Itself** — No GitHub Actions or Jenkinsfile for linting, testing, building container images.
@@ -53,7 +54,7 @@ _(All three previous high-severity items resolved — see rev 2 notes below.)_
 | Log Encoder | DistilBERT → PCA (16D) | DistilBERT → PCA (16D) | ✅ Done |
 | Failure Classifier | Feed-forward neural net | 24→ReLU→Dropout→2 | ✅ Done |
 | Real-Time Orchestrator | Jenkins polling → predict → act → measure MTTR | Implemented with retry | ✅ Done |
-| Dashboard | Streamlit with MTTR charts, action log, failure heatmap | Not started | ❌ Missing |
+| Dashboard | Streamlit with MTTR charts, action log, failure heatmap | Full dashboard with 7 sections + human-in-the-loop | ✅ Done |
 | MTTR Reduction Target | 38% average | 44% avg in 50-episode eval (52D/6-action PPO) | ✅ Exceeds target |
 | Failure Types | OOM, FlakyTest, DependencyConflict, NetworkLatency | All four + Healthy | ✅ Done |
 | Kubernetes Integration | kubectl healing actions | All 6 actions implemented | ✅ Done |
@@ -67,7 +68,7 @@ _(All three previous high-severity items resolved — see rev 2 notes below.)_
 3. ~~Retrain PPO on new 52D/6-action env~~ — **DONE** (rev 3 — 44% MTTR reduction)
 4. **Add pytest to requirements.txt and write core tests** — `tests/test_prediction.py`, `tests/test_rl_agent.py`, `tests/test_orchestrator.py` — No tests exist outside telemetry.
 5. ~~Consolidate or delete `src/orchestration/main.py`~~ — **DONE** (rev 2 — deprecated; `run_once()` in orchestrator)
-6. **Build Streamlit dashboard** — `src/dashboard/app.py` — Paper's key deliverable: MTTR trend chart, action log table, failure type breakdown, live status.
+6. ~~Build Streamlit dashboard~~ — **DONE** (rev 4 — `src/dashboard/app.py` with 7 sections)
 7. **Fix README.md** — Replace "Ray RLlib" with "stable-baselines3 PPO", update architecture diagram, fill in "Coming soon" sections.
 8. **Create local setup automation** — Script or Makefile to: start Minikube, deploy dummy-app, start Jenkins container, run telemetry, launch orchestrator.
 9. **Align telemetry config var names** — Standardize `TELEMETRY_OUTPUT` vs `TELEMETRY_OUTPUT_PATH` across config.py, .env.example, and collector.py.
