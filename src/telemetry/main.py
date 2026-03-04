@@ -16,7 +16,7 @@ sys.path.insert(0, str(project_root))
 from src.telemetry.collector import TelemetryCollector
 from src.telemetry.config import (
     JENKINS_URL, JENKINS_USERNAME, JENKINS_TOKEN, JENKINS_JOB,
-    PROMETHEUS_URL, TELEMETRY_OUTPUT, POLL_INTERVAL, LOG_LEVEL, TELEMETRY_LOGS_ENABLED
+    PROMETHEUS_URL, TELEMETRY_OUTPUT_PATH, POLL_INTERVAL, LOG_LEVEL, TELEMETRY_LOGS_ENABLED
 )
 
 # Configure logging
@@ -67,8 +67,8 @@ Examples:
     )
     parser.add_argument(
         '--output',
-        default=TELEMETRY_OUTPUT,
-        help=f'Output CSV file (default: {TELEMETRY_OUTPUT})'
+        default=TELEMETRY_OUTPUT_PATH,
+        help=f'Output CSV file (default: {TELEMETRY_OUTPUT_PATH})'
     )
     parser.add_argument(
         '--interval',
