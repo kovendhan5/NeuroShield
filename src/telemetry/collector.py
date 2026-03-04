@@ -3,6 +3,7 @@ NeuroShield Telemetry Collector
 Polls Jenkins API and Prometheus metrics every 10s, saves to CSV.
 """
 
+import os
 import time
 import csv
 import logging
@@ -248,13 +249,15 @@ class TelemetryCollector:
         self._init_csv()
     
     def _init_csv(self):
-        """Initialize CSV file with headers."""
+        """Initialize CSV file with headers (append-safe)."""
         try:
             Path(self.output_csv).parent.mkdir(parents=True, exist_ok=True)
-            with open(self.output_csv, 'w', newline='') as f:
-                writer = csv.DictWriter(f, fieldnames=TelemetryData.__dataclass_fields__.keys())
-                writer.writeheader()
-            logger.info(f"Initialized CSV: {self.output_csv}")
+            write_header = not os.path.exists(self.output_csv)
+            with open(self.output_csv, 'a', newline='') as f:
+                if write_header:
+                    writer = csv.DictWriter(f, fieldnames=TelemetryData.__dataclass_fields__.keys())
+                    writer.writeheader()
+            logger.info(f"Initialized CSV: {self.output_csv} (header={'written' if write_header else 'exists'})")
         except Exception as e:
             logger.error(f"Failed to initialize CSV: {e}")
     
