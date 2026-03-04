@@ -1,6 +1,19 @@
-"""Orchestrator for NeuroShield MVP flow."""
+"""Orchestrator for NeuroShield MVP flow.
+
+.. deprecated::
+    This module is superseded by ``src.orchestrator.main``.
+    Use ``python -m src.orchestrator.main --mode simulate`` instead.
+"""
 
 from __future__ import annotations
+
+import warnings
+warnings.warn(
+    "src.orchestration.main is deprecated. "
+    "Use src.orchestrator.main --mode simulate instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 from pathlib import Path
 from typing import Dict

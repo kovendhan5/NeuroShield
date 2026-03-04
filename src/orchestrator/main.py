@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import csv
+import json
 import logging
 import os
 import subprocess
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, Optional, Tuple, TypeVar
 
@@ -15,7 +18,7 @@ import requests
 from dotenv import load_dotenv
 from stable_baselines3 import PPO
 
-from src.prediction.predictor import FailurePredictor
+from src.prediction.predictor import FailurePredictor, build_52d_state
 
 T = TypeVar("T")
 
@@ -39,10 +42,12 @@ def retry_call(fn: Callable[[], T], max_attempts: int = 3, delay: int = 2) -> T:
     raise RuntimeError("retry_call exhausted")
 
 ACTION_NAMES: Dict[int, str] = {
-    0: "Retry",
-    1: "Scale Pods",
-    2: "Rollback",
-    3: "No-op",
+    0: "retry_stage",
+    1: "clean_and_rerun",
+    2: "regenerate_config",
+    3: "reallocate_resources",
+    4: "trigger_safe_rollback",
+    5: "escalate_to_human",
 }
 
 
@@ -224,58 +229,154 @@ def _get_k8s_resource_metrics(namespace: str) -> Dict[str, float]:
     return metrics
 
 
+def _append_csv(path: str, row: Dict[str, str]) -> None:
+    """Append a row to a CSV file, creating with headers if needed."""
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    write_header = not p.exists()
+    with open(p, "a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=list(row.keys()))
+        if write_header:
+            writer.writeheader()
+        writer.writerow(row)
+
+
+def _log_action_history(action_id: int, success: bool, duration_ms: float) -> None:
+    """Record every healing action to data/action_history.csv."""
+    _append_csv("data/action_history.csv", {
+        "timestamp": datetime.utcnow().isoformat(),
+        "action_id": str(action_id),
+        "action_name": ACTION_NAMES.get(action_id, "unknown"),
+        "success": str(success),
+        "duration_ms": f"{duration_ms:.0f}",
+    })
+
+
 def execute_healing_action(action_id: int, context: Dict[str, str]) -> bool:
-    """Execute the healing action based on PPO decision (with retry)."""
+    """Execute one of 6 healing actions based on PPO decision (with retry).
+
+    Actions:
+        0 — retry_stage:          Re-trigger Jenkins build
+        1 — clean_and_rerun:      Trigger clean build (CLEAN_WORKSPACE=true)
+        2 — regenerate_config:    Flag for manual config review
+        3 — reallocate_resources: Patch K8s deployment resource limits
+        4 — trigger_safe_rollback: kubectl rollout undo + wait for status
+        5 — escalate_to_human:    Write alert to escalation log
+    """
+    start_ms = time.time() * 1000.0
+    success = False
     try:
         namespace = _namespace()
-        if action_id == 0:  # Retry
-            logging.info("Executing action: Retry build #%s", context.get("build_number", "unknown"))
+        service = context.get("affected_service", _affected_service())
+
+        if action_id == 0:  # retry_stage
+            logging.info("[ACTION] retry_stage — build #%s", context.get("build_number", "?"))
             jenkins_url = _required_env("JENKINS_URL")
             job_name = _required_env("JENKINS_JOB")
             username = _required_env("JENKINS_USERNAME")
             token = _required_env("JENKINS_TOKEN")
-            retry_url = f"{jenkins_url}/job/{job_name}/build"
+            build_url = f"{jenkins_url}/job/{job_name}/build"
 
-            def _trigger_build() -> bool:
-                response = requests.post(retry_url, auth=(username, token), timeout=15)
-                if response.status_code not in {200, 201, 202}:
-                    raise RuntimeError(f"Jenkins trigger failed: {response.status_code}")
+            def _trigger() -> bool:
+                r = requests.post(build_url, auth=(username, token), timeout=15)
+                if r.status_code not in {200, 201, 202}:
+                    raise RuntimeError(f"Jenkins trigger failed: {r.status_code}")
                 return True
 
-            return retry_call(_trigger_build)
+            success = retry_call(_trigger)
 
-        if action_id == 1:  # Scale pods
-            service = context.get("affected_service", _affected_service())
-            replicas = _scale_replicas()
-            logging.info("Executing action: Scale pods for %s to %d", service, replicas)
-            cmd = ["kubectl", "scale", f"deploy/{service}", f"--replicas={replicas}", "-n", namespace]
+        elif action_id == 1:  # clean_and_rerun
+            logging.info("[ACTION] clean_and_rerun — build #%s", context.get("build_number", "?"))
+            jenkins_url = _required_env("JENKINS_URL")
+            job_name = _required_env("JENKINS_JOB")
+            username = _required_env("JENKINS_USERNAME")
+            token = _required_env("JENKINS_TOKEN")
+            build_url = f"{jenkins_url}/job/{job_name}/buildWithParameters"
 
-            def _scale() -> bool:
-                result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            def _clean_build() -> bool:
+                r = requests.post(
+                    build_url,
+                    auth=(username, token),
+                    params={"CLEAN_WORKSPACE": "true"},
+                    timeout=15,
+                )
+                if r.status_code not in {200, 201, 202}:
+                    # Fallback: plain build if parameterised trigger unsupported
+                    r2 = requests.post(
+                        f"{jenkins_url}/job/{job_name}/build",
+                        auth=(username, token),
+                        timeout=15,
+                    )
+                    if r2.status_code not in {200, 201, 202}:
+                        raise RuntimeError(f"Clean build trigger failed: {r2.status_code}")
                 return True
 
-            return retry_call(_scale)
+            success = retry_call(_clean_build)
+            logging.info("[ACTION] Clean & Re-run triggered")
 
-        if action_id == 2:  # Rollback
-            service = context.get("affected_service", _affected_service())
-            logging.info("Executing action: Rollback deployment for %s", service)
-            cmd = ["kubectl", "rollout", "undo", f"deploy/{service}", "-n", namespace]
+        elif action_id == 2:  # regenerate_config
+            logging.info("[ACTION] Config regeneration flagged — manual review needed")
+            _append_csv("data/config_regen_log.csv", {
+                "timestamp": datetime.utcnow().isoformat(),
+                "job_name": context.get("build_number", "unknown"),
+                "reason": context.get("failure_pattern", "unknown"),
+                "action_taken": "regenerate_config — manual review required",
+            })
+            success = True
 
-            def _rollback() -> bool:
-                result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        elif action_id == 3:  # reallocate_resources
+            logging.info("[ACTION] reallocate_resources — %s in %s", service, namespace)
+            patch_json = json.dumps({
+                "spec": {"template": {"spec": {"containers": [{
+                    "name": service,
+                    "resources": {"limits": {"cpu": "500m", "memory": "512Mi"}},
+                }]}}}
+            })
+            cmd = [
+                "kubectl", "patch", "deployment", service,
+                "-n", namespace,
+                "--type=strategic",
+                f"--patch={patch_json}",
+            ]
+
+            def _patch() -> bool:
+                subprocess.run(cmd, capture_output=True, text=True, check=True)
                 return True
 
-            return retry_call(_rollback)
+            success = retry_call(_patch)
 
-        if action_id == 3:  # No-op
-            logging.info("Executing action: No operation")
-            return True
+        elif action_id == 4:  # trigger_safe_rollback
+            logging.info("[ACTION] trigger_safe_rollback — %s in %s", service, namespace)
+            undo_cmd = ["kubectl", "rollout", "undo", f"deploy/{service}", "-n", namespace]
+            status_cmd = ["kubectl", "rollout", "status", f"deploy/{service}", "-n", namespace, "--timeout=60s"]
 
-        logging.warning("Unknown action id: %s", action_id)
-        return False
+            def _rollback_and_wait() -> bool:
+                subprocess.run(undo_cmd, capture_output=True, text=True, check=True)
+                subprocess.run(status_cmd, capture_output=True, text=True, check=True)
+                return True
+
+            success = retry_call(_rollback_and_wait)
+
+        elif action_id == 5:  # escalate_to_human
+            logging.info("[ACTION] Escalated to human review — check data/escalation_log.csv")
+            _append_csv("data/escalation_log.csv", {
+                "timestamp": datetime.utcnow().isoformat(),
+                "failure_probability": context.get("failure_prob", "?"),
+                "failure_state": context.get("failure_pattern", "unknown"),
+                "recommended_action": "escalate_to_human",
+                "status": "PENDING_HUMAN_REVIEW",
+            })
+            success = True
+
+        else:
+            logging.warning("Unknown action id: %s", action_id)
+
     except Exception as exc:
         logging.exception("Error executing action %s: %s", action_id, exc)
-        return False
+
+    duration_ms = time.time() * 1000.0 - start_ms
+    _log_action_history(action_id, success, duration_ms)
+    return success
 
 
 def _is_failure(result: str) -> bool:
@@ -322,6 +423,8 @@ def main() -> None:
 
                 if log_text:
                     resource_metrics = _get_k8s_resource_metrics(namespace)
+
+                    # --- 24D telemetry dict for the failure classifier ---
                     telemetry_dict = {
                         "jenkins_last_build_status": build.result,
                         "jenkins_last_build_duration": build.duration_ms,
@@ -331,8 +434,24 @@ def main() -> None:
                         "prometheus_pod_count": resource_metrics["pod_count"],
                         "prometheus_error_rate": resource_metrics["error_rate"],
                     }
+                    failure_prob = predictor.predict(log_text, telemetry_dict)
 
-                    failure_prob, state_vector = predictor.predict_with_state(log_text, telemetry_dict)
+                    # --- 52D state vector for the PPO policy ---
+                    jenkins_data = {
+                        "build_duration": build.duration_ms,
+                        "build_number": build.number,
+                        "retry_count": 0,
+                    }
+                    prometheus_data = {
+                        "cpu_avg_5m": resource_metrics["cpu_millicores_avg"],
+                        "memory_avg_5m": resource_metrics["memory_mib_avg"],
+                        "pod_restarts": 0,
+                        "node_count": resource_metrics["pod_count"],
+                    }
+                    state_52d = build_52d_state(
+                        jenkins_data, prometheus_data, log_text, predictor.encoder,
+                    )
+
                     pattern, pattern_action = detect_failure_pattern(log_text)
                     logging.info(
                         "Failure probability: %.3f | pattern=%s | build_url=%s",
@@ -345,7 +464,7 @@ def main() -> None:
                         if policy is None:
                             action_id = 0
                         else:
-                            action, _ = policy.predict(np.asarray(state_vector, dtype=np.float32), deterministic=True)
+                            action, _ = policy.predict(state_52d, deterministic=True)
                             action_id = int(action)
                         if pattern_action is not None:
                             action_id = pattern_action
@@ -356,6 +475,8 @@ def main() -> None:
                             {
                                 "build_number": str(build.number),
                                 "affected_service": _affected_service(),
+                                "failure_prob": f"{failure_prob:.3f}",
+                                "failure_pattern": pattern or "none",
                             },
                         )
                         if success:
@@ -401,5 +522,67 @@ def main() -> None:
         logging.exception("Error in orchestrator: %s", exc)
 
 
+# ---------------------------------------------------------------------------
+# Simulate mode – one-shot simulated decision (no Jenkins / K8s needed)
+# ---------------------------------------------------------------------------
+
+def run_once(model_dir: str = "models") -> None:
+    """Run one end-to-end simulated decision (no live infra required)."""
+    import random
+    from src.prediction.data_generator import generate_sample
+    from src.rl_agent.simulator import simulate_action
+
+    _setup_logging()
+    model_path = Path(model_dir)
+    predictor = FailurePredictor(model_dir=model_path)
+
+    try:
+        policy = PPO.load(str(model_path / "ppo_policy.zip"))
+    except Exception:
+        policy = None
+        logging.warning("PPO policy not found; falling back to retry_stage")
+
+    sample = generate_sample(random.Random(42))
+    log_text = sample.log_text
+    failure_prob = predictor.predict(log_text, sample.telemetry)
+
+    jenkins_data = {"build_duration": 60_000, "build_number": 0}
+    prometheus_data = {"cpu_avg_5m": 0.5, "memory_avg_5m": 256}
+    state_52d = build_52d_state(jenkins_data, prometheus_data, log_text, predictor.encoder)
+
+    if policy is None:
+        action = 0
+    else:
+        action, _ = policy.predict(state_52d, deterministic=True)
+        action = int(action)
+
+    result = simulate_action(sample.failure_type, action, random.Random(123))
+    baseline = simulate_action(sample.failure_type, 0, random.Random(456))
+    mttr_reduction = max(0.0, (baseline.mttr - result.mttr) / max(baseline.mttr, 1.0))
+
+    logging.info("Failure probability: %.3f", failure_prob)
+    logging.info("Chosen action: %s", ACTION_NAMES.get(action, str(action)))
+    logging.info("Simulated MTTR: %.1fs (baseline retry %.1fs)", result.mttr, baseline.mttr)
+    logging.info("MTTR reduction: %.1f%%", mttr_reduction * 100.0)
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
 if __name__ == "__main__":
-    main()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="NeuroShield Orchestrator")
+    parser.add_argument(
+        "--mode",
+        choices=["live", "simulate"],
+        default="live",
+        help="'live' monitors Jenkins in real-time; 'simulate' runs one offline decision",
+    )
+    cli_args = parser.parse_args()
+
+    if cli_args.mode == "simulate":
+        run_once()
+    else:
+        main()

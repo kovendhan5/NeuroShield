@@ -170,3 +170,83 @@ def predict(log_text: str, telemetry: TelemetryInput = None) -> float:
     if _DEFAULT_PREDICTOR is None:
         _DEFAULT_PREDICTOR = FailurePredictor()
     return _DEFAULT_PREDICTOR.predict(log_text, telemetry)
+
+
+# ---------------------------------------------------------------------------
+# 52-dimensional state builder (matches RL env observation layout)
+# ---------------------------------------------------------------------------
+# [ 0:10]  Build Metrics          (10D)
+# [10:22]  Resource Metrics        (12D)
+# [22:38]  Log Embeddings          (16D)  PCA-reduced DistilBERT
+# [38:52]  Dependency Signals      (14D)
+# ---------------------------------------------------------------------------
+
+_BUILD_METRIC_KEYS = [
+    "build_duration", "passed_tests", "failed_tests", "retry_count",
+    "stage_failure_rate", "build_number", "queue_time", "artifact_size",
+    "test_coverage", "change_set_size",
+]
+
+_RESOURCE_METRIC_KEYS = [
+    "cpu_avg_5m", "memory_avg_5m", "memory_max", "pod_restarts",
+    "throttle_events", "network_latency", "disk_io", "cpu_limit_pct",
+    "memory_limit_pct", "node_count", "pending_pods", "evicted_pods",
+]
+
+_DEPENDENCY_SIGNAL_KEYS = [
+    "dep_version_drifts", "cache_hit_ratio", "cache_miss_ratio",
+    "new_deps_count", "outdated_deps", "pkg_manager_npm",
+    "pkg_manager_maven", "pkg_manager_pip", "dep_resolution_time",
+    "lock_file_changed", "transitive_dep_count", "dep_conflict_count",
+    "registry_latency", "dep_download_failures",
+]
+
+
+def build_52d_state(
+    jenkins_data: Dict[str, Any],
+    prometheus_data: Dict[str, Any],
+    log_text: str,
+    encoder: Optional[LogEncoder] = None,
+) -> np.ndarray:
+    """Build a 52-dimensional state vector for the PPO policy.
+
+    Args:
+        jenkins_data: Dict with build metrics and dependency signals.
+        prometheus_data: Dict with resource / cluster metrics.
+        log_text: Raw Jenkins console log for DistilBERT encoding.
+        encoder: Pre-initialised LogEncoder with PCA loaded.
+                 If *None*, log embeddings default to zeros(16).
+
+    Returns:
+        np.ndarray of shape (52,) with values clipped to [-10, 10].
+    """
+    # -- Build Metrics (10D) ------------------------------------------------
+    build_vec = [_safe_float(jenkins_data.get(k)) for k in _BUILD_METRIC_KEYS]
+
+    # -- Resource Metrics (12D) ---------------------------------------------
+    resource_vec = [_safe_float(prometheus_data.get(k)) for k in _RESOURCE_METRIC_KEYS]
+
+    # -- Log Embeddings (16D) -----------------------------------------------
+    if log_text and encoder is not None:
+        try:
+            log_embed = encoder.encode_logs([log_text])[0].astype(np.float32)
+        except Exception:
+            log_embed = np.zeros(16, dtype=np.float32)
+    else:
+        log_embed = np.zeros(16, dtype=np.float32)
+
+    # -- Dependency Signals (14D) -------------------------------------------
+    dep_vec = [_safe_float(jenkins_data.get(k)) for k in _DEPENDENCY_SIGNAL_KEYS]
+
+    # -- Concatenate and clip -----------------------------------------------
+    state = np.concatenate(
+        [
+            np.array(build_vec, dtype=np.float32),    # 10D
+            np.array(resource_vec, dtype=np.float32),  # 12D
+            log_embed,                                  # 16D
+            np.array(dep_vec, dtype=np.float32),       # 14D
+        ],
+        axis=0,
+    )
+    assert state.shape == (52,), f"Expected 52D state, got {state.shape}"
+    return np.clip(state, -10.0, 10.0)
