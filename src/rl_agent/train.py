@@ -82,6 +82,12 @@ def main() -> None:
     """Train PPO and save policy."""
     args = parse_args()
     try:
+        output_dir = Path(args.model_dir)
+        stale_model = output_dir / "ppo_policy.zip"
+        if stale_model.exists():
+            stale_model.unlink()
+            print(f"Removed stale model: {stale_model}")
+
         set_random_seed(42)
         env = DummyVecEnv([lambda: Monitor(_make_env(seed=42))])
         env = VecMonitor(env)
