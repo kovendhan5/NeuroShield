@@ -728,3 +728,7 @@ FileNotFoundError: [Errno 2] No such file or directory: 'data\\minikube_telemetr
 2026-02-27 16:50:31,334 - WARNING - Error fetching build info: 404
 2026-02-27 16:50:41,373 - WARNING - Error fetching build info: 404
 2026-02-27 16:50:51,407 - WARNING - Error fetching build info: 404
+2026-03-04 22:10:49,719 - INFO - Failure probability: 0.010
+2026-03-04 22:10:49,720 - INFO - Chosen action: escalate_to_human
+2026-03-04 22:10:49,720 - INFO - Simulated MTTR: 12.4s (baseline retry 12.4s)
+2026-03-04 22:10:49,720 - INFO - MTTR reduction: 0.0%
