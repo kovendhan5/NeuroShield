@@ -33,7 +33,7 @@ def _make_env(seed: int) -> NeuroShieldEnv:
 def _evaluate(model: PPO, episodes: int = 50) -> None:
     """Run evaluation episodes and print metrics."""
     eval_env = _make_env(seed=42)
-    action_counts: Dict[int, int] = {0: 0, 1: 0, 2: 0, 3: 0}
+    action_counts: Dict[int, int] = {i: 0 for i in range(6)}
     mttr_reductions: List[float] = []
     successes = 0
     optimal_mttr = {
@@ -64,10 +64,8 @@ def _evaluate(model: PPO, episodes: int = 50) -> None:
     success_rate = successes / max(episodes, 1)
 
     action_percentages = [
-        action_counts[0] / max(episodes, 1) * 100.0,
-        action_counts[1] / max(episodes, 1) * 100.0,
-        action_counts[2] / max(episodes, 1) * 100.0,
-        action_counts[3] / max(episodes, 1) * 100.0,
+        action_counts[i] / max(episodes, 1) * 100.0
+        for i in range(6)
     ]
 
     print(f"=== Final Evaluation ({episodes} episodes) ===")
@@ -75,10 +73,8 @@ def _evaluate(model: PPO, episodes: int = 50) -> None:
     print(f"Success Rate: {success_rate * 100.0:.0f}%")
     print(
         "Action Distribution: ["
-        f"{action_percentages[0]:.1f}%, "
-        f"{action_percentages[1]:.1f}%, "
-        f"{action_percentages[2]:.1f}%, "
-        f"{action_percentages[3]:.1f}%]"
+        + ", ".join(f"{p:.1f}%" for p in action_percentages)
+        + "]"
     )
 
 
