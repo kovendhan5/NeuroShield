@@ -86,6 +86,11 @@ def main() -> int:
         print("Job created: neuroshield-test-job")
         return 0
 
+    # Job already exists — treat as success
+    if response.status_code in (400, 409) and "already exists" in response.text.lower():
+        print("[SKIP] Job already exists \u2014 continuing")
+        return 0
+
     print(f"Failed to create job. Status: {response.status_code}")
     print(response.text)
     return 1

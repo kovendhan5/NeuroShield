@@ -8,7 +8,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Callable, Dict, Optional, Tuple, TypeVar
 
 import numpy as np
 import requests
@@ -17,12 +17,45 @@ from stable_baselines3 import PPO
 
 from src.prediction.predictor import FailurePredictor
 
+T = TypeVar("T")
+
+
+def retry_call(fn: Callable[[], T], max_attempts: int = 3, delay: int = 2) -> T:
+    """Retry *fn* with exponential back-off.
+
+    Args:
+        fn: Zero-argument callable to retry.
+        max_attempts: Maximum number of attempts.
+        delay: Base delay in seconds (doubled each retry).
+    """
+    for attempt in range(max_attempts):
+        try:
+            return fn()
+        except Exception as e:
+            if attempt == max_attempts - 1:
+                raise
+            time.sleep(delay * (2 ** attempt))
+    # unreachable, but keeps mypy happy
+    raise RuntimeError("retry_call exhausted")
+
 ACTION_NAMES: Dict[int, str] = {
     0: "Retry",
     1: "Scale Pods",
     2: "Rollback",
     3: "No-op",
 }
+
+
+def _namespace() -> str:
+    return os.getenv("K8S_NAMESPACE", "neuroshield")
+
+
+def _affected_service() -> str:
+    return os.getenv("AFFECTED_SERVICE", "dummy-app")
+
+
+def _scale_replicas() -> int:
+    return int(os.getenv("SCALE_REPLICAS", "3"))
 
 
 @dataclass
@@ -61,11 +94,11 @@ def _required_env(name: str) -> str:
 
 
 def get_latest_build_info(jenkins_url: str, job_name: str, username: str, token: str) -> Optional[BuildInfo]:
-    """Get the latest build information from Jenkins."""
+    """Get the latest build information from Jenkins (with retry)."""
     url = f"{jenkins_url}/job/{job_name}/lastBuild/api/json"
     auth = (username, token)
 
-    try:
+    def _call() -> Optional[BuildInfo]:
         response = requests.get(url, auth=auth, timeout=15)
         if response.status_code == 200:
             build_data = response.json()
@@ -79,22 +112,28 @@ def get_latest_build_info(jenkins_url: str, job_name: str, username: str, token:
             )
         logging.warning("Error fetching build info: %s", response.status_code)
         return None
+
+    try:
+        return retry_call(_call)
     except Exception as exc:
         logging.exception("Exception in get_latest_build_info: %s", exc)
         return None
 
 
 def get_build_log(jenkins_url: str, job_name: str, build_number: int, username: str, token: str) -> str:
-    """Get the console log for a specific build."""
+    """Get the console log for a specific build (with retry)."""
     url = f"{jenkins_url}/job/{job_name}/{build_number}/consoleText"
     auth = (username, token)
 
-    try:
+    def _call() -> str:
         response = requests.get(url, auth=auth, timeout=30)
         if response.status_code == 200:
             return response.text
         logging.warning("Error fetching build log: %s", response.status_code)
         return ""
+
+    try:
+        return retry_call(_call)
     except Exception as exc:
         logging.exception("Exception in get_build_log: %s", exc)
         return ""
@@ -145,7 +184,7 @@ def _parse_kubectl_top_nodes(output: str) -> Tuple[float, float]:
 
 
 def _get_k8s_resource_metrics(namespace: str) -> Dict[str, float]:
-    """Fetch basic resource metrics from Kubernetes via kubectl.
+    """Fetch basic resource metrics from Kubernetes via kubectl (with retry).
 
     Returns defaults on failure.
     """
@@ -155,43 +194,40 @@ def _get_k8s_resource_metrics(namespace: str) -> Dict[str, float]:
         "pod_count": 0.0,
         "error_rate": 0.0,
     }
-    try:
-        top_nodes = subprocess.run(
+
+    def _top_nodes() -> subprocess.CompletedProcess:
+        return subprocess.run(
             ["kubectl", "top", "nodes"],
-            capture_output=True,
-            text=True,
-            check=False,
+            capture_output=True, text=True, check=True,
         )
-        if top_nodes.returncode == 0:
-            cpu_avg, mem_avg = _parse_kubectl_top_nodes(top_nodes.stdout)
-            metrics["cpu_millicores_avg"] = cpu_avg
-            metrics["memory_mib_avg"] = mem_avg
-        else:
-            logging.debug("kubectl top nodes failed: %s", top_nodes.stderr.strip())
-    except Exception as exc:
-        logging.debug("kubectl top nodes exception: %s", exc)
 
     try:
-        pods = subprocess.run(
-            ["kubectl", "get", "pods", "-n", namespace, "--no-headers"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if pods.returncode == 0:
-            metrics["pod_count"] = float(len([line for line in pods.stdout.splitlines() if line.strip()]))
-        else:
-            logging.debug("kubectl get pods failed: %s", pods.stderr.strip())
+        top_nodes = retry_call(_top_nodes)
+        cpu_avg, mem_avg = _parse_kubectl_top_nodes(top_nodes.stdout)
+        metrics["cpu_millicores_avg"] = cpu_avg
+        metrics["memory_mib_avg"] = mem_avg
     except Exception as exc:
-        logging.debug("kubectl get pods exception: %s", exc)
+        logging.debug("kubectl top nodes failed: %s", exc)
+
+    def _get_pods() -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["kubectl", "get", "pods", "-n", namespace, "--no-headers"],
+            capture_output=True, text=True, check=True,
+        )
+
+    try:
+        pods = retry_call(_get_pods)
+        metrics["pod_count"] = float(len([line for line in pods.stdout.splitlines() if line.strip()]))
+    except Exception as exc:
+        logging.debug("kubectl get pods failed: %s", exc)
 
     return metrics
 
 
 def execute_healing_action(action_id: int, context: Dict[str, str]) -> bool:
-    """Execute the healing action based on PPO decision."""
+    """Execute the healing action based on PPO decision (with retry)."""
     try:
-        namespace = os.getenv("K8S_NAMESPACE", "sock-shop")
+        namespace = _namespace()
         if action_id == 0:  # Retry
             logging.info("Executing action: Retry build #%s", context.get("build_number", "unknown"))
             jenkins_url = _required_env("JENKINS_URL")
@@ -199,26 +235,37 @@ def execute_healing_action(action_id: int, context: Dict[str, str]) -> bool:
             username = _required_env("JENKINS_USERNAME")
             token = _required_env("JENKINS_TOKEN")
             retry_url = f"{jenkins_url}/job/{job_name}/build"
-            response = requests.post(retry_url, auth=(username, token), timeout=15)
-            return response.status_code in {200, 201, 202}
+
+            def _trigger_build() -> bool:
+                response = requests.post(retry_url, auth=(username, token), timeout=15)
+                if response.status_code not in {200, 201, 202}:
+                    raise RuntimeError(f"Jenkins trigger failed: {response.status_code}")
+                return True
+
+            return retry_call(_trigger_build)
 
         if action_id == 1:  # Scale pods
-            service = context.get("affected_service", "carts")
-            logging.info("Executing action: Scale pods for %s", service)
-            cmd = ["kubectl", "scale", f"deploy/{service}", "--replicas=3", "-n", namespace]
-            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
-            if result.returncode != 0:
-                logging.error("kubectl scale failed: %s", result.stderr.strip())
-            return result.returncode == 0
+            service = context.get("affected_service", _affected_service())
+            replicas = _scale_replicas()
+            logging.info("Executing action: Scale pods for %s to %d", service, replicas)
+            cmd = ["kubectl", "scale", f"deploy/{service}", f"--replicas={replicas}", "-n", namespace]
+
+            def _scale() -> bool:
+                result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+                return True
+
+            return retry_call(_scale)
 
         if action_id == 2:  # Rollback
-            service = context.get("affected_service", "carts")
+            service = context.get("affected_service", _affected_service())
             logging.info("Executing action: Rollback deployment for %s", service)
             cmd = ["kubectl", "rollout", "undo", f"deploy/{service}", "-n", namespace]
-            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
-            if result.returncode != 0:
-                logging.error("kubectl rollback failed: %s", result.stderr.strip())
-            return result.returncode == 0
+
+            def _rollback() -> bool:
+                result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+                return True
+
+            return retry_call(_rollback)
 
         if action_id == 3:  # No-op
             logging.info("Executing action: No operation")
@@ -245,7 +292,7 @@ def main() -> None:
     username = _required_env("JENKINS_USERNAME")
     token = _required_env("JENKINS_TOKEN")
     poll_interval = int(os.getenv("POLL_INTERVAL", "10"))
-    namespace = os.getenv("K8S_NAMESPACE", "sock-shop")
+    namespace = _namespace()
 
     logging.info("Connecting to Jenkins: %s", jenkins_url)
     logging.info("Monitoring job: %s", job_name)
@@ -308,7 +355,7 @@ def main() -> None:
                             action_id,
                             {
                                 "build_number": str(build.number),
-                                "affected_service": os.getenv("AFFECTED_SERVICE", "carts"),
+                                "affected_service": _affected_service(),
                             },
                         )
                         if success:

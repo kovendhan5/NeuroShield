@@ -1,3 +1,5 @@
+# DEPRECATED: Use setup_jenkins_job.py instead. This file will be removed.
+
 import os
 import random
 import sys
