@@ -1,6 +1,6 @@
 # NeuroShield — Project State Tracker
-> Last Updated: 2026-03-04 (rev 5)
-> Overall Status: 🟡 IN PROGRESS
+> Last Updated: 2026-03-04 (rev 6)
+> Overall Status: 🟢 READY FOR DEMO
 
 ---
 
@@ -19,13 +19,15 @@
 - [x] **Telemetry Unit Tests** — Tests for JenkinsPoll, PrometheusPoll, TelemetryCollector, TelemetryData. (`tests/test_telemetry.py`)
 - [x] **Streamlit Dashboard** — Human-in-the-loop AIOps dashboard with: failure-probability gauge, RL agent decision panel, SHAP feature importance, MTTR trend chart, failure-type breakdown pie, feedback approve/override/pause buttons, escalation review, sidebar controls. Auto-refreshes every 10s. (`src/dashboard/app.py`)
 - [x] **End-to-End Integration Tests** — 83 tests across 4 files, all passing. Coverage: prediction pipeline (data generator, log encoder, classifier, 52D state builder), RL agent (simulator constants, sample_state, simulate_action, NeuroShieldEnv reset/step/termination/seeding), orchestrator (retry_call, detect_failure_pattern, kubectl parsing, CSV logging, all 6 healing actions with mocked Jenkins/K8s, BuildInfo). (`tests/test_prediction.py`, `tests/test_rl_agent.py`, `tests/test_orchestrator.py`, `tests/test_telemetry.py`)
+- [x] **README.md Rewrite** — Complete rewrite: accurate architecture diagram, 52D/6-action spec, stable-baselines3 PPO (not Ray RLlib), results table, configuration reference, security notes. All "Coming soon" sections replaced with real content.
+- [x] **Telemetry Config Var Alignment** — Standardized `TELEMETRY_OUTPUT_PATH` across `config.py`, `main.py`, `.env.example`, and `dashboard/app.py`. Default: `data/telemetry.csv`.
+- [x] **Automated Local Setup Scripts** — One-command setup for Linux/Mac (`scripts/setup_local.sh`) and Windows (`scripts/setup_local.ps1`): checks prerequisites, installs deps, trains models, starts Minikube, builds Docker images, deploys K8s manifests, port-forwards Jenkins, creates job, runs tests.
 
 ## 🔄 IN PROGRESS
 
-_(All three previous high-severity items resolved — see rev 2 notes below.)_
+_(No items currently in progress.)_
 
 ## ❌ NOT STARTED
-- [ ] **Automated Local Setup Script** — No single command to spin up Minikube + Jenkins + Prometheus + dummy app + start telemetry. Needs: `scripts/setup_local.sh` or `Makefile` target.
 - [ ] **CI/CD Pipeline for NeuroShield Itself** — No GitHub Actions or Jenkinsfile for linting, testing, building container images.
 - [ ] **Grafana/Prometheus Monitoring Stack** — Docker-compose files exist in `microservices-demo/` but are not wired to NeuroShield's own metrics.
 - [ ] **Model Retraining Pipeline** — No automated retraining from production telemetry data. Paper mentions continuous learning loop.
@@ -37,9 +39,9 @@ _(All three previous high-severity items resolved — see rev 2 notes below.)_
 - ~~ISSUE: `execute_healing_action()` only handles 0-3~~ → **RESOLVED**: Full 6-action handler with CSV logging to `data/action_history.csv`.
 - ~~ISSUE: Stale PPO model trained on 24D/4-action env~~ → **RESOLVED**: `train.py` auto-deletes stale model. Retrained 52D/6-action PPO — 44% avg MTTR reduction, 56% success rate.
 - ~~ISSUE: pytest not installed~~ → **RESOLVED**: pytest 9.0.2 installed; 8/8 telemetry tests pass.
-- ISSUE: README.md claims Ray RLlib but code uses stable-baselines3 PPO | FILE: README.md | SEVERITY: **Low**
+- ~~ISSUE: README.md claims Ray RLlib but code uses stable-baselines3 PPO~~ → **RESOLVED** (rev 6): Full README rewrite with correct stable-baselines3 references.
 - ISSUE: `.env` file contains real Jenkins token — must rotate before sharing repo | FILE: .env | SEVERITY: **Medium**
-- ISSUE: `_init_csv()` output path defaults differ between collector ("data/telemetry.csv") and .env.example (`TELEMETRY_OUTPUT_PATH`) — key name is `TELEMETRY_OUTPUT` in config.py | FILE: src/telemetry/config.py | SEVERITY: **Low**
+- ~~ISSUE: `_init_csv()` output path defaults differ between collector and .env.example~~ → **RESOLVED** (rev 6): Standardized to `TELEMETRY_OUTPUT_PATH` everywhere.
 
 ## 📐 PAPER vs CODE ALIGNMENT
 
@@ -64,12 +66,12 @@ _(All three previous high-severity items resolved — see rev 2 notes below.)_
 1. ~~Build 52D state vector in orchestrator~~ — **DONE** (rev 2)
 2. ~~Expand `execute_healing_action()` to 6 actions~~ — **DONE** (rev 2)
 3. ~~Retrain PPO on new 52D/6-action env~~ — **DONE** (rev 3 — 44% MTTR reduction)
-4. **Add pytest to requirements.txt and write core tests** — `tests/test_prediction.py`, `tests/test_rl_agent.py`, `tests/test_orchestrator.py` — No tests exist outside telemetry.
+4. ~~Add pytest and write core tests~~ — **DONE** (rev 5 — 83 tests across 4 files)
 5. ~~Consolidate or delete `src/orchestration/main.py`~~ — **DONE** (rev 2 — deprecated; `run_once()` in orchestrator)
 6. ~~Build Streamlit dashboard~~ — **DONE** (rev 4 — `src/dashboard/app.py` with 7 sections)
-7. **Fix README.md** — Replace "Ray RLlib" with "stable-baselines3 PPO", update architecture diagram, fill in "Coming soon" sections.
-8. **Create local setup automation** — Script or Makefile to: start Minikube, deploy dummy-app, start Jenkins container, run telemetry, launch orchestrator.
-9. **Align telemetry config var names** — Standardize `TELEMETRY_OUTPUT` vs `TELEMETRY_OUTPUT_PATH` across config.py, .env.example, and collector.py.
+7. ~~Fix README.md~~ — **DONE** (rev 6 — complete rewrite with accurate architecture, results, config table)
+8. ~~Create local setup automation~~ — **DONE** (rev 6 — `scripts/setup_local.sh` + `scripts/setup_local.ps1`)
+9. ~~Align telemetry config var names~~ — **DONE** (rev 6 — standardized to `TELEMETRY_OUTPUT_PATH`)
 10. **Rotate Jenkins token in `.env`** — Current token is live; generate a new one before any repo sharing.
 
 ## 📁 KEY FILES REFERENCE
@@ -94,5 +96,10 @@ _(All three previous high-severity items resolved — see rev 2 notes below.)_
 - `infra/dummy-app/Dockerfile` — Prebuilt dummy app container image
 - `infra/jenkins-builder/Dockerfile.jenkins` — Custom Jenkins image with pinned kubectl
 - `tests/test_telemetry.py` — Unit tests for telemetry collector
+- `tests/test_prediction.py` — Prediction pipeline tests (data gen, encoder, classifier, 52D state)
+- `tests/test_rl_agent.py` — RL env + simulator tests (state sampling, actions, env API)
+- `tests/test_orchestrator.py` — Orchestrator tests (retry, healing actions, CSV logging)
+- `scripts/setup_local.sh` — One-command local setup (Linux/Mac)
+- `scripts/setup_local.ps1` — One-command local setup (Windows)
 - `PRD.md` — Product requirements document
 - `docs/paper_summary.md` — Research paper summary
