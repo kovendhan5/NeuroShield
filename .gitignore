@@ -18,3 +18,15 @@ secrets*
 .secrets/
 *.sqlite
 *.db
+
+## Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+## Models / Data
+models/
+data/
+*.pth
+*.zip
+*.joblib
