@@ -1,5 +1,5 @@
 # NeuroShield — Project State Tracker
-> Last Updated: 2026-03-04 (rev 4)
+> Last Updated: 2026-03-04 (rev 5)
 > Overall Status: 🟡 IN PROGRESS
 
 ---
@@ -18,15 +18,13 @@
 - [x] **Prebuilt Dummy App Image** — Flask-based dummy app with Dockerfile, referenced in K8s manifests. (`infra/dummy-app/`)
 - [x] **Telemetry Unit Tests** — Tests for JenkinsPoll, PrometheusPoll, TelemetryCollector, TelemetryData. (`tests/test_telemetry.py`)
 - [x] **Streamlit Dashboard** — Human-in-the-loop AIOps dashboard with: failure-probability gauge, RL agent decision panel, SHAP feature importance, MTTR trend chart, failure-type breakdown pie, feedback approve/override/pause buttons, escalation review, sidebar controls. Auto-refreshes every 10s. (`src/dashboard/app.py`)
+- [x] **End-to-End Integration Tests** — 83 tests across 4 files, all passing. Coverage: prediction pipeline (data generator, log encoder, classifier, 52D state builder), RL agent (simulator constants, sample_state, simulate_action, NeuroShieldEnv reset/step/termination/seeding), orchestrator (retry_call, detect_failure_pattern, kubectl parsing, CSV logging, all 6 healing actions with mocked Jenkins/K8s, BuildInfo). (`tests/test_prediction.py`, `tests/test_rl_agent.py`, `tests/test_orchestrator.py`, `tests/test_telemetry.py`)
 
 ## 🔄 IN PROGRESS
 
 _(All three previous high-severity items resolved — see rev 2 notes below.)_
 
 ## ❌ NOT STARTED
-
-- [ ] **Streamlit Dashboard** — ~~Paper describes a real-time dashboard~~ **MOVED TO COMPLETED (rev 4)**.
-- [ ] **End-to-End Integration Tests** — No tests for prediction pipeline, RL training, or orchestrator loop. Needs: `tests/test_prediction.py`, `tests/test_rl_agent.py`, `tests/test_orchestrator.py`.
 - [ ] **Automated Local Setup Script** — No single command to spin up Minikube + Jenkins + Prometheus + dummy app + start telemetry. Needs: `scripts/setup_local.sh` or `Makefile` target.
 - [ ] **CI/CD Pipeline for NeuroShield Itself** — No GitHub Actions or Jenkinsfile for linting, testing, building container images.
 - [ ] **Grafana/Prometheus Monitoring Stack** — Docker-compose files exist in `microservices-demo/` but are not wired to NeuroShield's own metrics.
