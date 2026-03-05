@@ -30,13 +30,6 @@ T = TypeVar("T")
 
 
 def retry_call(fn: Callable[[], T], max_attempts: int = 3, delay: int = 2) -> T:
-    """Retry *fn* with exponential back-off.
-
-    Args:
-        fn: Zero-argument callable to retry.
-        max_attempts: Maximum number of attempts.
-        delay: Base delay in seconds (doubled each retry).
-    """
     for attempt in range(max_attempts):
         try:
             return fn()
@@ -44,21 +37,20 @@ def retry_call(fn: Callable[[], T], max_attempts: int = 3, delay: int = 2) -> T:
             if attempt == max_attempts - 1:
                 raise
             time.sleep(delay * (2 ** attempt))
-    # unreachable, but keeps mypy happy
     raise RuntimeError("retry_call exhausted")
 
 ACTION_NAMES: Dict[int, str] = {
-    0: "retry_stage",
-    1: "clean_and_rerun",
-    2: "regenerate_config",
-    3: "reallocate_resources",
-    4: "trigger_safe_rollback",
+    0: "restart_pod",
+    1: "scale_up",
+    2: "retry_build",
+    3: "rollback_deploy",
+    4: "clear_cache",
     5: "escalate_to_human",
 }
 
 
 def _namespace() -> str:
-    return os.getenv("K8S_NAMESPACE", "neuroshield")
+    return os.getenv("K8S_NAMESPACE", "default")
 
 
 def _affected_service() -> str:
@@ -94,7 +86,19 @@ def _setup_logging() -> None:
 
 
 def _load_env() -> None:
-    load_dotenv(override=False)
+    """Load .env from project root, supporting both JENKINS_USER and JENKINS_USERNAME."""
+    env_path = Path(_PROJECT_ROOT) / ".env"
+    load_dotenv(env_path, override=True)
+    # Normalize: if JENKINS_USERNAME is missing, fall back to JENKINS_USER
+    if not os.getenv("JENKINS_USERNAME") and os.getenv("JENKINS_USER"):
+        os.environ["JENKINS_USERNAME"] = os.getenv("JENKINS_USER", "")
+    # Normalize: if JENKINS_PASSWORD is missing, fall back to JENKINS_TOKEN
+    if not os.getenv("JENKINS_PASSWORD") and os.getenv("JENKINS_TOKEN"):
+        os.environ["JENKINS_PASSWORD"] = os.getenv("JENKINS_TOKEN", "")
+
+
+def _env(name: str, default: str = "") -> str:
+    return os.getenv(name, default)
 
 
 def _required_env(name: str) -> str:
