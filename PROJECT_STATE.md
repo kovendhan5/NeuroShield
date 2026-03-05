@@ -1,5 +1,5 @@
 # NeuroShield — Project State Tracker
-> Last Updated: 2026-03-04 (rev 6)
+> Last Updated: 2026-03-05 (rev 7)
 > Overall Status: 🟢 READY FOR DEMO
 
 ---
@@ -21,7 +21,8 @@
 - [x] **End-to-End Integration Tests** — 83 tests across 4 files, all passing. Coverage: prediction pipeline (data generator, log encoder, classifier, 52D state builder), RL agent (simulator constants, sample_state, simulate_action, NeuroShieldEnv reset/step/termination/seeding), orchestrator (retry_call, detect_failure_pattern, kubectl parsing, CSV logging, all 6 healing actions with mocked Jenkins/K8s, BuildInfo). (`tests/test_prediction.py`, `tests/test_rl_agent.py`, `tests/test_orchestrator.py`, `tests/test_telemetry.py`)
 - [x] **README.md Rewrite** — Complete rewrite: accurate architecture diagram, 52D/6-action spec, stable-baselines3 PPO (not Ray RLlib), results table, configuration reference, security notes. All "Coming soon" sections replaced with real content.
 - [x] **Telemetry Config Var Alignment** — Standardized `TELEMETRY_OUTPUT_PATH` across `config.py`, `main.py`, `.env.example`, and `dashboard/app.py`. Default: `data/telemetry.csv`.
-- [x] **Automated Local Setup Scripts** — One-command setup for Linux/Mac (`scripts/setup_local.sh`) and Windows (`scripts/setup_local.ps1`): checks prerequisites, installs deps, trains models, starts Minikube, builds Docker images, deploys K8s manifests, port-forwards Jenkins, creates job, runs tests.
+- [x] **Automated Local Setup Scripts** — Windows PowerShell scripts: `start_services.ps1`, `start_minikube.ps1`, `start_neuroshield.ps1`, `stop_neuroshield.ps1`. Plus Linux/Mac `setup_local.sh`.
+- [x] **Docker Compose Infrastructure** — Jenkins + Prometheus run as Docker containers (not in Minikube). Minikube runs dummy-app only. Reduces memory usage significantly. (`docker-compose.yml`, `infra/prometheus/prometheus.yml`)
 
 ## 🔄 IN PROGRESS
 
@@ -29,7 +30,6 @@ _(No items currently in progress.)_
 
 ## ❌ NOT STARTED
 - [ ] **CI/CD Pipeline for NeuroShield Itself** — No GitHub Actions or Jenkinsfile for linting, testing, building container images.
-- [ ] **Grafana/Prometheus Monitoring Stack** — Docker-compose files exist in `microservices-demo/` but are not wired to NeuroShield's own metrics.
 - [ ] **Model Retraining Pipeline** — No automated retraining from production telemetry data. Paper mentions continuous learning loop.
 
 ## ⚠️ KNOWN ISSUES
@@ -72,7 +72,8 @@ _(No items currently in progress.)_
 7. ~~Fix README.md~~ — **DONE** (rev 6 — complete rewrite with accurate architecture, results, config table)
 8. ~~Create local setup automation~~ — **DONE** (rev 6 — `scripts/setup_local.sh` + `scripts/setup_local.ps1`)
 9. ~~Align telemetry config var names~~ — **DONE** (rev 6 — standardized to `TELEMETRY_OUTPUT_PATH`)
-10. **Rotate Jenkins token in `.env`** — Current token is live; generate a new one before any repo sharing.
+10. ~~Docker Compose infrastructure~~ — **DONE** (rev 7 — Jenkins + Prometheus as Docker containers, Minikube for dummy-app only)
+11. **Rotate Jenkins token in `.env`** — Current token is live; generate a new one before any repo sharing.
 
 ## 📁 KEY FILES REFERENCE
 
@@ -101,5 +102,12 @@ _(No items currently in progress.)_
 - `tests/test_orchestrator.py` — Orchestrator tests (retry, healing actions, CSV logging)
 - `scripts/setup_local.sh` — One-command local setup (Linux/Mac)
 - `scripts/setup_local.ps1` — One-command local setup (Windows)
+- `scripts/start_services.ps1` — First-time Jenkins + Prometheus setup (Docker Compose)
+- `scripts/start_minikube.ps1` — Start Minikube + build/deploy dummy-app
+- `scripts/start_neuroshield.ps1` — Master quick-start (daily use after first-time setup)
+- `scripts/stop_neuroshield.ps1` — Clean shutdown of all services
+- `docker-compose.yml` — Jenkins + Prometheus container definitions
+- `infra/prometheus/prometheus.yml` — Prometheus scrape config (Jenkins, dummy-app)
+- `DEMO.md` — Quick demo guide with key numbers
 - `PRD.md` — Product requirements document
 - `docs/paper_summary.md` — Research paper summary
