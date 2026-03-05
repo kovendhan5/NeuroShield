@@ -1,4 +1,4 @@
-# NeuroShield — Quick Start (after first-time setup)
+# NeuroShield -- Quick Start (after first-time setup)
 Write-Host "Starting NeuroShield..." -ForegroundColor Cyan
 
 # 1. Start Docker services
@@ -27,7 +27,7 @@ Write-Host "[OK] dummy-app at http://localhost:5000" -ForegroundColor Green
 # 4. Train models if missing
 Write-Host "[4/5] Checking ML models..." -ForegroundColor Yellow
 if (-not (Test-Path "models/ppo_policy.zip") -or -not (Test-Path "models/failure_predictor.pth")) {
-    Write-Host "Training models (first time — takes 3-5 mins)..." -ForegroundColor Yellow
+    Write-Host "Training models (first time -- takes 3-5 mins)..." -ForegroundColor Yellow
     python src/prediction/train.py
     python -m src.rl_agent.train
     Write-Host "[OK] Models trained" -ForegroundColor Green
@@ -41,24 +41,24 @@ python -m pytest tests/ -q --tb=short
 if ($LASTEXITCODE -eq 0) {
     Write-Host "[OK] All tests passing" -ForegroundColor Green
 } else {
-    Write-Host "[WARN] Some tests failed — check output above" -ForegroundColor Yellow
+    Write-Host "[WARN] Some tests failed -- check output above" -ForegroundColor Yellow
 }
 
 # Final instructions
 Write-Host ""
-Write-Host "══════════════════════════════════════" -ForegroundColor Cyan
+Write-Host "======================================" -ForegroundColor Cyan
 Write-Host "NeuroShield is ready!" -ForegroundColor Green
-Write-Host "══════════════════════════════════════" -ForegroundColor Cyan
+Write-Host "======================================" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Open 3 NEW PowerShell terminals:" -ForegroundColor White
 Write-Host ""
-Write-Host "  Terminal 1 — Telemetry Collector:" -ForegroundColor Yellow
+Write-Host "  Terminal 1 -- Telemetry Collector:" -ForegroundColor Yellow
 Write-Host "    python src/telemetry/main.py" -ForegroundColor White
 Write-Host ""
-Write-Host "  Terminal 2 — Orchestrator (simulate):" -ForegroundColor Yellow
+Write-Host "  Terminal 2 -- Orchestrator (simulate):" -ForegroundColor Yellow
 Write-Host "    python src/orchestrator/main.py --mode simulate" -ForegroundColor Yellow
 Write-Host ""
-Write-Host "  Terminal 3 — Dashboard:" -ForegroundColor Yellow
+Write-Host "  Terminal 3 -- Dashboard:" -ForegroundColor Yellow
 Write-Host "    streamlit run src/dashboard/app.py" -ForegroundColor White
 Write-Host ""
 Write-Host "  Dashboard URL: http://localhost:8501" -ForegroundColor Cyan
