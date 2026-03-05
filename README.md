@@ -1,6 +1,6 @@
 # 🛡️ NeuroShield
 ### AIOps-Driven Self-Healing CI/CD Pipelines using Reinforcement Learning
-> Jeppiaar Institute of Technology | IEEE Research Project
+> IEEE Research Project
 
 [![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![stable-baselines3](https://img.shields.io/badge/RL-stable--baselines3%20PPO-orange.svg)](https://stable-baselines3.readthedocs.io/)
