@@ -3,8 +3,15 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 from typing import Dict, List
+
+# Ensure project root is on sys.path for direct invocation
+_PROJECT_ROOT = str(Path(__file__).resolve().parents[2])
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
 import numpy as np
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import EvalCallback
@@ -13,7 +20,7 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import VecMonitor
 from stable_baselines3.common.utils import set_random_seed
 
-from .env import NeuroShieldEnv
+from src.rl_agent.env import NeuroShieldEnv
 
 
 def parse_args() -> argparse.Namespace:

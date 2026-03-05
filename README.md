@@ -91,7 +91,7 @@ python -m src.orchestrator.main --mode simulate
 ### 6. Launch dashboard
 
 ```bash
-streamlit run src/dashboard/app.py
+python -m streamlit run src/dashboard/app.py
 ```
 
 ### 7. Run live mode

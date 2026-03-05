@@ -13,7 +13,7 @@ Step 3: Run simulation
    python src/orchestrator/main.py --mode simulate
 
 Step 4: Open dashboard (in a second terminal)
-   streamlit run src/dashboard/app.py
+   python -m streamlit run src/dashboard/app.py
    → Open http://localhost:8501
 
 ## What to Show in the Demo
