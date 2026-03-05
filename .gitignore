@@ -21,8 +21,12 @@ secrets*
 
 ## Python
 __pycache__/
-*.pyc
+*.py[cod]
+*.pyo
 .pytest_cache/
+venv/
+.venv/
+*.egg-info/
 
 ## Models / Data
 models/
@@ -30,3 +34,18 @@ data/
 *.pth
 *.zip
 *.joblib
+*.pkl
+
+## Logs
+logs/
+*.log
+
+## IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+## OS
+Thumbs.db
+.DS_Store

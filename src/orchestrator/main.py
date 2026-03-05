@@ -284,7 +284,7 @@ def execute_healing_action(action_id: int, context: Dict[str, str]) -> bool:
             jenkins_url = _env("JENKINS_URL", "http://localhost:8080")
             job_name = _env("JENKINS_JOB", "build-pipeline")
             username = _env("JENKINS_USERNAME", "admin")
-            token = _env("JENKINS_TOKEN", "admin123")
+            token = _env("JENKINS_TOKEN", "")
             build_url = f"{jenkins_url}/job/{job_name}/build"
 
             def _trigger() -> bool:
@@ -300,7 +300,7 @@ def execute_healing_action(action_id: int, context: Dict[str, str]) -> bool:
             jenkins_url = _env("JENKINS_URL", "http://localhost:8080")
             job_name = _env("JENKINS_JOB", "build-pipeline")
             username = _env("JENKINS_USERNAME", "admin")
-            token = _env("JENKINS_TOKEN", "admin123")
+            token = _env("JENKINS_TOKEN", "")
             build_url = f"{jenkins_url}/job/{job_name}/buildWithParameters"
 
             def _clean_build() -> bool:
@@ -483,7 +483,7 @@ def main() -> None:
     # Read config from .env
     jenkins_url = _env("JENKINS_URL", "http://localhost:8080")
     jenkins_user = _env("JENKINS_USERNAME", "admin")
-    jenkins_pass = _env("JENKINS_PASSWORD", "admin123")
+    jenkins_pass = _env("JENKINS_PASSWORD", "")
     jenkins_token = _env("JENKINS_TOKEN", jenkins_pass)
     job_name = _env("JENKINS_JOB", "build-pipeline")
     prom_url = _env("PROMETHEUS_URL", "http://localhost:9090")
@@ -731,7 +731,7 @@ def run_single_cycle() -> Dict[str, str]:
 
     jenkins_url = _env("JENKINS_URL", "http://localhost:8080")
     jenkins_user = _env("JENKINS_USERNAME", "admin")
-    jenkins_token = _env("JENKINS_TOKEN", "admin123")
+    jenkins_token = _env("JENKINS_TOKEN", "")
     job_name = _env("JENKINS_JOB", "build-pipeline")
     prom_url = _env("PROMETHEUS_URL", "http://localhost:9090")
     app_url = _env("DUMMY_APP_URL", "http://localhost:5000")
