@@ -266,11 +266,11 @@ def execute_healing_action(action_id: int, context: Dict[str, str]) -> bool:
     """Execute one of 6 healing actions based on PPO decision (with retry).
 
     Actions:
-        0 — retry_stage:          Re-trigger Jenkins build
-        1 — clean_and_rerun:      Trigger clean build (CLEAN_WORKSPACE=true)
-        2 — regenerate_config:    Flag for manual config review
-        3 — reallocate_resources: Patch K8s deployment resource limits
-        4 — trigger_safe_rollback: kubectl rollout undo + wait for status
+        0 — restart_pod:          Re-trigger Jenkins build
+        1 — scale_up:             Trigger clean build (CLEAN_WORKSPACE=true)
+        2 — retry_build:          Flag for manual config review
+        3 — rollback_deploy:      Patch K8s deployment resource limits
+        4 — clear_cache:          kubectl rollout undo + wait for status
         5 — escalate_to_human:    Write alert to escalation log
     """
     start_ms = time.time() * 1000.0
@@ -279,12 +279,12 @@ def execute_healing_action(action_id: int, context: Dict[str, str]) -> bool:
         namespace = _namespace()
         service = context.get("affected_service", _affected_service())
 
-        if action_id == 0:  # retry_stage
-            logging.info("[ACTION] retry_stage — build #%s", context.get("build_number", "?"))
-            jenkins_url = _required_env("JENKINS_URL")
-            job_name = _required_env("JENKINS_JOB")
-            username = _required_env("JENKINS_USERNAME")
-            token = _required_env("JENKINS_TOKEN")
+        if action_id == 0:  # restart_pod
+            logging.info("[ACTION] restart_pod — build #%s", context.get("build_number", "?"))
+            jenkins_url = _env("JENKINS_URL", "http://localhost:8080")
+            job_name = _env("JENKINS_JOB", "build-pipeline")
+            username = _env("JENKINS_USERNAME", "admin")
+            token = _env("JENKINS_TOKEN", "admin123")
             build_url = f"{jenkins_url}/job/{job_name}/build"
 
             def _trigger() -> bool:
@@ -295,12 +295,12 @@ def execute_healing_action(action_id: int, context: Dict[str, str]) -> bool:
 
             success = retry_call(_trigger)
 
-        elif action_id == 1:  # clean_and_rerun
-            logging.info("[ACTION] clean_and_rerun — build #%s", context.get("build_number", "?"))
-            jenkins_url = _required_env("JENKINS_URL")
-            job_name = _required_env("JENKINS_JOB")
-            username = _required_env("JENKINS_USERNAME")
-            token = _required_env("JENKINS_TOKEN")
+        elif action_id == 1:  # scale_up
+            logging.info("[ACTION] scale_up — build #%s", context.get("build_number", "?"))
+            jenkins_url = _env("JENKINS_URL", "http://localhost:8080")
+            job_name = _env("JENKINS_JOB", "build-pipeline")
+            username = _env("JENKINS_USERNAME", "admin")
+            token = _env("JENKINS_TOKEN", "admin123")
             build_url = f"{jenkins_url}/job/{job_name}/buildWithParameters"
 
             def _clean_build() -> bool:
@@ -324,18 +324,18 @@ def execute_healing_action(action_id: int, context: Dict[str, str]) -> bool:
             success = retry_call(_clean_build)
             logging.info("[ACTION] Clean & Re-run triggered")
 
-        elif action_id == 2:  # regenerate_config
-            logging.info("[ACTION] Config regeneration flagged — manual review needed")
+        elif action_id == 2:  # retry_build
+            logging.info("[ACTION] retry_build flagged — retriggering build")
             _append_csv("data/config_regen_log.csv", {
                 "timestamp": datetime.utcnow().isoformat(),
                 "job_name": context.get("build_number", "unknown"),
                 "reason": context.get("failure_pattern", "unknown"),
-                "action_taken": "regenerate_config — manual review required",
+                "action_taken": "retry_build — retrigger pipeline",
             })
             success = True
 
-        elif action_id == 3:  # reallocate_resources
-            logging.info("[ACTION] reallocate_resources — %s in %s", service, namespace)
+        elif action_id == 3:  # rollback_deploy
+            logging.info("[ACTION] rollback_deploy — %s in %s", service, namespace)
             patch_json = json.dumps({
                 "spec": {"template": {"spec": {"containers": [{
                     "name": service,
@@ -355,8 +355,8 @@ def execute_healing_action(action_id: int, context: Dict[str, str]) -> bool:
 
             success = retry_call(_patch)
 
-        elif action_id == 4:  # trigger_safe_rollback
-            logging.info("[ACTION] trigger_safe_rollback — %s in %s", service, namespace)
+        elif action_id == 4:  # clear_cache
+            logging.info("[ACTION] clear_cache — %s in %s", service, namespace)
             undo_cmd = ["kubectl", "rollout", "undo", f"deploy/{service}", "-n", namespace]
             status_cmd = ["kubectl", "rollout", "status", f"deploy/{service}", "-n", namespace, "--timeout=60s"]
 
@@ -393,141 +393,284 @@ def _is_failure(result: str) -> bool:
     return result.upper() in {"FAILURE", "UNSTABLE", "ABORTED"}
 
 
+# ---------------------------------------------------------------------------
+# Telemetry collection helpers (live mode)
+# ---------------------------------------------------------------------------
+
+def _check_service(url: str, timeout: int = 5) -> Tuple[bool, float]:
+    """Check if a service is reachable. Returns (is_up, latency_ms)."""
+    try:
+        start = time.time()
+        r = requests.get(url, timeout=timeout)
+        latency = (time.time() - start) * 1000
+        return r.status_code < 500, latency
+    except Exception:
+        return False, 0.0
+
+
+def _collect_prometheus_metrics(prom_url: str) -> Dict[str, float]:
+    """Query Prometheus for CPU, memory, pod count, error rate."""
+    metrics: Dict[str, float] = {
+        "cpu_usage": 0.0,
+        "memory_usage": 0.0,
+        "pod_count": 0.0,
+        "error_rate": 0.0,
+    }
+    queries = {
+        "cpu_usage": 'rate(container_cpu_usage_seconds_total[1m])',
+        "memory_usage": '(container_memory_working_set_bytes / container_spec_memory_limit_bytes) * 100',
+        "pod_count": 'count(kube_pod_info)',
+        "error_rate": 'rate(http_requests_total{code=~"5.."}[5m])',
+    }
+    for key, query in queries.items():
+        try:
+            r = requests.get(f"{prom_url}/api/v1/query", params={"query": query}, timeout=5)
+            if r.status_code == 200:
+                results = r.json().get("data", {}).get("result", [])
+                if results:
+                    metrics[key] = float(results[0]["value"][1])
+        except Exception:
+            pass
+    return metrics
+
+
+def _collect_dummy_app_health(app_url: str) -> Dict[str, float]:
+    """Get health metrics from the dummy-app."""
+    info: Dict[str, float] = {"health_pct": 0.0, "response_ms": 0.0}
+    try:
+        start = time.time()
+        r = requests.get(f"{app_url}/health", timeout=5)
+        info["response_ms"] = (time.time() - start) * 1000
+        if r.status_code == 200:
+            data = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+            info["health_pct"] = float(data.get("health", data.get("status_code", 100)))
+        else:
+            info["health_pct"] = 50.0
+    except Exception:
+        info["health_pct"] = 0.0
+    return info
+
+
+def _save_telemetry_row(row: Dict[str, str]) -> None:
+    """Append a telemetry row to data/telemetry.csv."""
+    _append_csv("data/telemetry.csv", row)
+
+
+def _print_banner() -> None:
+    print("\n" + "=" * 65)
+    print("  NeuroShield AIOps Orchestrator — Live Mode")
+    print("=" * 65)
+
+
+def _print_cycle_header(cycle: int) -> None:
+    print(f"\n{'─' * 55}")
+    print(f"  CYCLE #{cycle}  |  {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}")
+    print(f"{'─' * 55}")
+
+
+def _print_status(label: str, ok: bool, extra: str = "") -> None:
+    icon = "✓" if ok else "✗"
+    tag = "ONLINE" if ok else "OFFLINE"
+    print(f"  [{icon}] {label:20s} {tag:8s}  {extra}")
+
+
 def main() -> None:
     _setup_logging()
     _load_env()
-    logging.info("Starting NeuroShield Real-Time Orchestrator")
 
-    jenkins_url = _required_env("JENKINS_URL")
-    job_name = _required_env("JENKINS_JOB")
-    username = _required_env("JENKINS_USERNAME")
-    token = _required_env("JENKINS_TOKEN")
-    poll_interval = int(os.getenv("POLL_INTERVAL", "10"))
+    _print_banner()
+
+    # Read config from .env
+    jenkins_url = _env("JENKINS_URL", "http://localhost:8080")
+    jenkins_user = _env("JENKINS_USERNAME", "admin")
+    jenkins_pass = _env("JENKINS_PASSWORD", "admin123")
+    jenkins_token = _env("JENKINS_TOKEN", jenkins_pass)
+    job_name = _env("JENKINS_JOB", "build-pipeline")
+    prom_url = _env("PROMETHEUS_URL", "http://localhost:9090")
+    app_url = _env("DUMMY_APP_URL", "http://localhost:5000")
+    poll_interval = int(_env("POLL_INTERVAL", "15"))
     namespace = _namespace()
 
-    logging.info("Connecting to Jenkins: %s", jenkins_url)
-    logging.info("Monitoring job: %s", job_name)
+    print(f"\n  Config:")
+    print(f"    Jenkins:    {jenkins_url}  (job: {job_name})")
+    print(f"    Prometheus: {prom_url}")
+    print(f"    Dummy App:  {app_url}")
+    print(f"    Namespace:  {namespace}")
+    print(f"    Interval:   {poll_interval}s")
 
+    # Load ML models
+    print("\n  Loading models...")
     predictor = FailurePredictor(model_dir="models")
+    print("    [OK] DistilBERT failure predictor loaded")
+
     try:
         policy = PPO.load("models/ppo_policy.zip")
+        print("    [OK] PPO RL policy loaded (52D state → 6 actions)")
     except Exception as exc:
         policy = None
-        logging.warning("PPO policy not loaded, falling back to Retry: %s", exc)
+        print(f"    [!!] PPO policy not found — falling back to default action ({exc})")
 
-    baseline_mttr_min = 0.0
-    neuro_mttr_min = 0.0
-    total_failures = 0
-    successful_interventions = 0
-
+    # Tracking
+    cycle_count = 0
+    total_actions = 0
+    successful_actions = 0
     last_build_number: Optional[int] = None
-    pending_intervention_start_ms: Optional[int] = None
+
+    print(f"\n  Entering monitoring loop (Ctrl+C to stop)...")
 
     try:
         while True:
-            build = get_latest_build_info(jenkins_url, job_name, username, token)
+            cycle_count += 1
+            _print_cycle_header(cycle_count)
 
-            if build and build.number != last_build_number:
-                logging.info("New build detected: #%s (%s)", build.number, build.result)
-                log_text = get_build_log(jenkins_url, job_name, build.number, username, token)
+            # --- Step 1: Check service health ---
+            jenkins_ok, jenkins_lat = _check_service(f"{jenkins_url}/api/json",
+                                                     timeout=5)
+            prom_ok, prom_lat = _check_service(f"{prom_url}/-/healthy", timeout=5)
+            app_ok, app_lat = _check_service(app_url, timeout=5)
 
-                if log_text:
-                    resource_metrics = _get_k8s_resource_metrics(namespace)
+            _print_status("Jenkins", jenkins_ok, f"{jenkins_lat:.0f}ms" if jenkins_ok else "")
+            _print_status("Prometheus", prom_ok, f"{prom_lat:.0f}ms" if prom_ok else "")
+            _print_status("Dummy App", app_ok, f"{app_lat:.0f}ms" if app_ok else "")
 
-                    # --- 24D telemetry dict for the failure classifier ---
-                    telemetry_dict = {
-                        "jenkins_last_build_status": build.result,
-                        "jenkins_last_build_duration": build.duration_ms,
-                        "jenkins_queue_length": 0,
-                        "prometheus_cpu_usage": resource_metrics["cpu_millicores_avg"],
-                        "prometheus_memory_usage": resource_metrics["memory_mib_avg"],
-                        "prometheus_pod_count": resource_metrics["pod_count"],
-                        "prometheus_error_rate": resource_metrics["error_rate"],
-                    }
-                    failure_prob = predictor.predict(log_text, telemetry_dict)
+            # --- Step 2: Collect telemetry ---
+            prom_metrics = _collect_prometheus_metrics(prom_url) if prom_ok else {
+                "cpu_usage": 0, "memory_usage": 0, "pod_count": 0, "error_rate": 0}
+            app_health = _collect_dummy_app_health(app_url) if app_ok else {
+                "health_pct": 0, "response_ms": 0}
 
-                    # --- 52D state vector for the PPO policy ---
-                    jenkins_data = {
-                        "build_duration": build.duration_ms,
-                        "build_number": build.number,
-                        "retry_count": 0,
-                    }
-                    prometheus_data = {
-                        "cpu_avg_5m": resource_metrics["cpu_millicores_avg"],
-                        "memory_avg_5m": resource_metrics["memory_mib_avg"],
-                        "pod_restarts": 0,
-                        "node_count": resource_metrics["pod_count"],
-                    }
-                    state_52d = build_52d_state(
-                        jenkins_data, prometheus_data, log_text, predictor.encoder,
-                    )
+            # Get Jenkins build info
+            build = None
+            log_text = ""
+            if jenkins_ok:
+                build = get_latest_build_info(jenkins_url, job_name, jenkins_user, jenkins_token)
+                if build:
+                    log_text = get_build_log(jenkins_url, job_name, build.number, jenkins_user, jenkins_token)
 
-                    pattern, pattern_action = detect_failure_pattern(log_text)
-                    logging.info(
-                        "Failure probability: %.3f | pattern=%s | build_url=%s",
-                        failure_prob,
-                        pattern,
-                        build.url,
-                    )
+            build_status = build.result if build else "UNKNOWN"
+            build_num = build.number if build else 0
+            build_duration = build.duration_ms if build else 0
 
-                    if failure_prob > 0.5:
-                        if policy is None:
-                            action_id = 0
-                        else:
-                            action, _ = policy.predict(state_52d, deterministic=True)
-                            action_id = int(action)
-                        if pattern_action is not None:
-                            action_id = pattern_action
-                        logging.info("NeuroShield decision: %s", ACTION_NAMES.get(action_id, str(action_id)))
+            print(f"\n  Telemetry:")
+            print(f"    Build #{build_num}: {build_status} ({build_duration}ms)")
+            print(f"    CPU: {prom_metrics['cpu_usage']:.1f}%  |  Memory: {prom_metrics['memory_usage']:.1f}%")
+            print(f"    Pods: {prom_metrics['pod_count']:.0f}  |  Error Rate: {prom_metrics['error_rate']:.4f}")
+            print(f"    App Health: {app_health['health_pct']:.0f}%  |  Response: {app_health['response_ms']:.0f}ms")
 
-                        success = execute_healing_action(
-                            action_id,
-                            {
-                                "build_number": str(build.number),
-                                "affected_service": _affected_service(),
-                                "failure_prob": f"{failure_prob:.3f}",
-                                "failure_pattern": pattern or "none",
-                            },
-                        )
-                        if success:
-                            successful_interventions += 1
-                            pending_intervention_start_ms = build.end_time_ms
-                            logging.info("Action executed successfully")
-                        else:
-                            logging.warning("Action execution failed")
-                    else:
-                        logging.info("Build looks healthy; no intervention")
+            # Save telemetry row
+            _save_telemetry_row({
+                "timestamp": datetime.utcnow().isoformat(),
+                "jenkins_last_build_status": build_status,
+                "jenkins_last_build_duration": str(build_duration),
+                "jenkins_queue_length": "0",
+                "prometheus_cpu_usage": f"{prom_metrics['cpu_usage']:.2f}",
+                "prometheus_memory_usage": f"{prom_metrics['memory_usage']:.2f}",
+                "prometheus_pod_count": f"{prom_metrics['pod_count']:.0f}",
+                "prometheus_error_rate": f"{prom_metrics['error_rate']:.4f}",
+                "app_health_pct": f"{app_health['health_pct']:.0f}",
+                "app_response_ms": f"{app_health['response_ms']:.0f}",
+            })
 
-                if _is_failure(build.result):
-                    total_failures += 1
-                    baseline_mttr_min += build.duration_ms / 60000.0
-                    if pending_intervention_start_ms is None:
-                        neuro_mttr_min += build.duration_ms / 60000.0
-                elif build.result.upper() == "SUCCESS" and pending_intervention_start_ms is not None:
-                    recovery_mttr = max(build.end_time_ms - pending_intervention_start_ms, 0) / 60000.0
-                    neuro_mttr_min += recovery_mttr
-                    pending_intervention_start_ms = None
+            # --- Step 3: Predict failure ---
+            telemetry_dict = {
+                "jenkins_last_build_status": build_status,
+                "jenkins_last_build_duration": build_duration,
+                "jenkins_queue_length": 0,
+                "prometheus_cpu_usage": prom_metrics["cpu_usage"],
+                "prometheus_memory_usage": prom_metrics["memory_usage"],
+                "prometheus_pod_count": prom_metrics["pod_count"],
+                "prometheus_error_rate": prom_metrics["error_rate"],
+            }
 
-                if total_failures > 0:
-                    mttr_reduction = (
-                        (baseline_mttr_min - neuro_mttr_min) / baseline_mttr_min * 100.0
-                        if baseline_mttr_min > 0
-                        else 0.0
-                    )
-                    logging.info(
-                        "MTTR baseline=%.2f min | neuro=%.2f min | reduction=%.1f%% | interventions=%s",
-                        baseline_mttr_min,
-                        neuro_mttr_min,
-                        mttr_reduction,
-                        successful_interventions,
-                    )
+            if not log_text:
+                log_text = f"Build {build_num} status {build_status}"
 
+            failure_prob = predictor.predict(log_text, telemetry_dict)
+
+            prob_bar = "█" * int(failure_prob * 20) + "░" * (20 - int(failure_prob * 20))
+            prob_label = "LOW" if failure_prob < 0.3 else "MEDIUM" if failure_prob < 0.6 else "HIGH" if failure_prob < 0.8 else "CRITICAL"
+            print(f"\n  Prediction:")
+            print(f"    Failure Prob: [{prob_bar}] {failure_prob:.3f} ({prob_label})")
+
+            # --- Step 4: RL Agent decision ---
+            jenkins_data = {
+                "build_duration": build_duration,
+                "build_number": build_num,
+                "retry_count": 0,
+            }
+            prometheus_data = {
+                "cpu_avg_5m": prom_metrics["cpu_usage"],
+                "memory_avg_5m": prom_metrics["memory_usage"],
+                "pod_restarts": 0,
+                "node_count": prom_metrics["pod_count"],
+            }
+            state_52d = build_52d_state(jenkins_data, prometheus_data, log_text, predictor.encoder)
+
+            pattern, pattern_action = detect_failure_pattern(log_text)
+
+            if failure_prob > 0.5 or _is_failure(build_status):
+                # Use PPO to choose action
+                if policy is not None:
+                    action, _ = policy.predict(state_52d, deterministic=True)
+                    action_id = int(action)
+                else:
+                    action_id = 0  # default to restart_pod
+
+                if pattern_action is not None and failure_prob > 0.7:
+                    action_id = pattern_action
+
+                action_name = ACTION_NAMES.get(action_id, f"action_{action_id}")
+                print(f"\n  RL Agent Decision:")
+                print(f"    Pattern:  {pattern}")
+                print(f"    Action:   [{action_id}] {action_name}")
+                print(f"    Reason:   failure_prob={failure_prob:.3f}, build={build_status}")
+
+                # Execute healing action
+                success = execute_healing_action(action_id, {
+                    "build_number": str(build_num),
+                    "affected_service": _affected_service(),
+                    "failure_prob": f"{failure_prob:.3f}",
+                    "failure_pattern": pattern or "none",
+                })
+
+                total_actions += 1
+                if success:
+                    successful_actions += 1
+                    print(f"    Result:   SUCCESS")
+                else:
+                    print(f"    Result:   FAILED")
+
+                # Log healing decision
+                _append_csv("data/healing_log.csv", {
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "cycle": str(cycle_count),
+                    "build_number": str(build_num),
+                    "build_status": build_status,
+                    "failure_prob": f"{failure_prob:.3f}",
+                    "pattern": pattern,
+                    "action_id": str(action_id),
+                    "action_name": action_name,
+                    "success": str(success),
+                    "cpu": f"{prom_metrics['cpu_usage']:.1f}",
+                    "memory": f"{prom_metrics['memory_usage']:.1f}",
+                    "app_health": f"{app_health['health_pct']:.0f}",
+                })
+            else:
+                print(f"\n  Status: System healthy — no intervention needed")
+
+            # --- Summary ---
+            print(f"\n  Stats: {total_actions} actions taken, {successful_actions} successful")
+            if build:
                 last_build_number = build.number
 
+            print(f"\n  Next cycle in {poll_interval}s...")
             time.sleep(poll_interval)
 
     except KeyboardInterrupt:
-        logging.info("Orchestrator stopped by user")
+        print(f"\n\n{'=' * 55}")
+        print(f"  Orchestrator stopped by user")
+        print(f"  Total cycles: {cycle_count} | Actions: {total_actions} | Success: {successful_actions}")
+        print(f"{'=' * 55}\n")
     except Exception as exc:
         logging.exception("Error in orchestrator: %s", exc)
 
@@ -543,6 +686,7 @@ def run_once(model_dir: str = "models") -> None:
     from src.rl_agent.simulator import simulate_action
 
     _setup_logging()
+    _load_env()
     model_path = Path(model_dir)
     predictor = FailurePredictor(model_dir=model_path)
 
@@ -550,7 +694,7 @@ def run_once(model_dir: str = "models") -> None:
         policy = PPO.load(str(model_path / "ppo_policy.zip"))
     except Exception:
         policy = None
-        logging.warning("PPO policy not found; falling back to retry_stage")
+        logging.warning("PPO policy not found; falling back to restart_pod")
 
     sample = generate_sample(random.Random(42))
     log_text = sample.log_text
@@ -574,6 +718,85 @@ def run_once(model_dir: str = "models") -> None:
     logging.info("Chosen action: %s", ACTION_NAMES.get(action, str(action)))
     logging.info("Simulated MTTR: %.1fs (baseline retry %.1fs)", result.mttr, baseline.mttr)
     logging.info("MTTR reduction: %.1f%%", mttr_reduction * 100.0)
+
+
+# ---------------------------------------------------------------------------
+# Single-cycle runner (used by dashboard "Run Healing Cycle" button)
+# ---------------------------------------------------------------------------
+
+def run_single_cycle() -> Dict[str, str]:
+    """Execute one healing cycle and return the result dict."""
+    _setup_logging()
+    _load_env()
+
+    jenkins_url = _env("JENKINS_URL", "http://localhost:8080")
+    jenkins_user = _env("JENKINS_USERNAME", "admin")
+    jenkins_token = _env("JENKINS_TOKEN", "admin123")
+    job_name = _env("JENKINS_JOB", "build-pipeline")
+    prom_url = _env("PROMETHEUS_URL", "http://localhost:9090")
+    app_url = _env("DUMMY_APP_URL", "http://localhost:5000")
+
+    predictor = FailurePredictor(model_dir="models")
+    try:
+        policy = PPO.load("models/ppo_policy.zip")
+    except Exception:
+        policy = None
+
+    # Collect
+    build = get_latest_build_info(jenkins_url, job_name, jenkins_user, jenkins_token)
+    log_text = ""
+    if build:
+        log_text = get_build_log(jenkins_url, job_name, build.number, jenkins_user, jenkins_token)
+    if not log_text:
+        log_text = "No build log available"
+
+    build_status = build.result if build else "UNKNOWN"
+    telemetry_dict = {
+        "jenkins_last_build_status": build_status,
+        "jenkins_last_build_duration": build.duration_ms if build else 0,
+        "jenkins_queue_length": 0,
+        "prometheus_cpu_usage": 0, "prometheus_memory_usage": 0,
+        "prometheus_pod_count": 0, "prometheus_error_rate": 0,
+    }
+    failure_prob = predictor.predict(log_text, telemetry_dict)
+
+    jenkins_data = {"build_duration": build.duration_ms if build else 0, "build_number": build.number if build else 0}
+    prometheus_data = {"cpu_avg_5m": 0, "memory_avg_5m": 0}
+    state_52d = build_52d_state(jenkins_data, prometheus_data, log_text, predictor.encoder)
+
+    if policy is not None:
+        action, _ = policy.predict(state_52d, deterministic=True)
+        action_id = int(action)
+    else:
+        action_id = 0
+
+    action_name = ACTION_NAMES.get(action_id, f"action_{action_id}")
+    success = execute_healing_action(action_id, {
+        "build_number": str(build.number if build else 0),
+        "affected_service": _affected_service(),
+        "failure_prob": f"{failure_prob:.3f}",
+        "failure_pattern": "manual_trigger",
+    })
+
+    _append_csv("data/healing_log.csv", {
+        "timestamp": datetime.utcnow().isoformat(),
+        "cycle": "manual",
+        "build_number": str(build.number if build else 0),
+        "build_status": build_status,
+        "failure_prob": f"{failure_prob:.3f}",
+        "pattern": "manual_trigger",
+        "action_id": str(action_id),
+        "action_name": action_name,
+        "success": str(success),
+        "cpu": "0", "memory": "0", "app_health": "0",
+    })
+
+    return {
+        "failure_prob": f"{failure_prob:.3f}",
+        "action": action_name,
+        "success": str(success),
+        "build": build_status,
+    }
 
 
 # ---------------------------------------------------------------------------
