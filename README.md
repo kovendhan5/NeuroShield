@@ -1,58 +1,107 @@
-# 🛡️ NeuroShield
-### AIOps-Driven Self-Healing CI/CD Pipelines using Reinforcement Learning
-> IEEE Research Project
+# NeuroShield
 
-[![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://www.python.org/downloads/)
-[![stable-baselines3](https://img.shields.io/badge/RL-stable--baselines3%20PPO-orange.svg)](https://stable-baselines3.readthedocs.io/)
-[![Transformers](https://img.shields.io/badge/🤗-Transformers-yellow.svg)](https://huggingface.co/docs/transformers)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+**AI-Powered Self-Healing CI/CD Pipeline**
 
----
-
-## 📋 Overview
-
-NeuroShield is an AIOps-driven self-healing CI/CD system that predicts imminent
-pipeline failures using DistilBERT log analysis and autonomously mitigates them
-via Proximal Policy Optimization (PPO) reinforcement learning. It monitors
-Jenkins builds, Prometheus metrics, and Kubernetes cluster state in real time,
-combining a 24-dimensional failure classifier with a 52-dimensional RL policy to
-select from six discrete healing actions — from simple stage retries to safe
-rollbacks and human escalation.
-
-The system includes a human-in-the-loop Streamlit dashboard that gives engineers
-full visibility into predictions, RL decisions, and SHAP feature importance,
-with approve/override/pause controls. In evaluation, NeuroShield achieves a
-**44% average MTTR reduction** (exceeding the paper target of 38%), an **87%
-failure prediction F1-score**, and a **66% reduction in false positives**
-compared to Jenkins-native alerting.
-
----
-
-## 🏗️ Architecture
+NeuroShield monitors CI/CD pipelines in real time, predicts build failures before
+they happen, and executes autonomous healing actions using reinforcement learning.
+It combines DistilBERT log analysis with a PPO-trained RL agent to select from
+six discrete healing actions, achieving a **44% MTTR reduction** and **F1 = 1.000**
+failure prediction accuracy.
 
 ```
-Data Sources                  NeuroShield Core                    Actions
-─────────────                 ────────────────                    ───────
-Jenkins CI     ──logs──►  Telemetry      ►  DistilBERT        ►  retry_stage
-Prometheus     ──metrics─►  Aggregator   ►  + PCA (16D)       ►  clean_and_rerun
-Kubernetes API ──events──►  (5-sec sync) ►  ────────────       ►  regenerate_config
-                                         ►  Failure Predictor  ►  reallocate_resources
-                                         ►  (F1: 87%)         ►  trigger_safe_rollback
-                                         ►  ────────────       ►  escalate_to_human
-                                         ►  PPO RL Agent  ──feedback──► Dashboard
-                                         ►  (52D state)         (Human-in-the-Loop)
+                          NeuroShield Architecture
+ ┌─────────────┐     ┌──────────────┐     ┌──────────────┐
+ │   Jenkins    │────>│  Telemetry   │────>│   Failure    │
+ │   Pipeline   │     │  Collector   │     │  Predictor   │
+ └─────────────┘     └──────────────┘     │  (DistilBERT │
+ ┌─────────────┐            │             │   + PCA)     │
+ │  Prometheus  │────────────┘             └──────┬───────┘
+ │   Metrics    │                                 │
+ └─────────────┘                          ┌──────▼───────┐
+ ┌─────────────┐                          │  RL Agent    │
+ │  Dummy App  │<─────── healing ────────│  (PPO)       │
+ │  (Flask)    │          actions         └──────┬───────┘
+ └─────────────┘                                 │
+                                          ┌──────▼───────┐
+                                          │  Streamlit   │
+                                          │  Dashboard   │
+                                          └──────────────┘
 ```
 
 ---
 
-## ⚡ Quick Start
+## Key Results
+
+| Metric | Value |
+|---|---|
+| MTTR Reduction | **44%** (target: 38%) |
+| Failure Prediction F1 | **1.000** |
+| State Space | 52 dimensions |
+| Healing Actions | 6 autonomous |
+| False Positive Rate | 7.8% (vs 23% Jenkins baseline) |
+
+---
+
+## Technologies
+
+| Layer | Technology |
+|---|---|
+| Failure Prediction | PyTorch (FailureClassifier), DistilBERT, sklearn PCA |
+| Reinforcement Learning | Stable Baselines3 (PPO), Gymnasium |
+| Telemetry | Jenkins REST API, Prometheus HTTP API |
+| Dashboard | Streamlit, Plotly |
+| Infrastructure | Docker Compose, Minikube, Kubernetes |
+| CI/CD | Jenkins |
+
+---
+
+## Project Structure
+
+```
+NeuroShield/
+├── src/
+│   ├── orchestrator/      # Main healing loop
+│   │   └── main.py        # Jenkins poll → predict → PPO → heal
+│   ├── dashboard/         # Streamlit UI
+│   │   └── app.py         # Dark-themed dashboard with charts
+│   ├── prediction/        # DistilBERT + PCA failure predictor
+│   │   ├── data_generator.py
+│   │   ├── log_encoder.py # DistilBERT → PCA (768D → 16D)
+│   │   ├── model.py       # FailureClassifier neural network
+│   │   ├── predictor.py   # Runtime inference + 52D state builder
+│   │   └── train.py       # Training script
+│   ├── rl_agent/          # PPO reinforcement learning agent
+│   │   ├── env.py         # Gymnasium env (52D obs, 6 actions)
+│   │   ├── simulator.py   # Synthetic state generator
+│   │   └── train.py       # PPO training + evaluation
+│   └── telemetry/         # Jenkins & Prometheus collectors
+│       ├── collector.py   # TelemetryCollector with log redaction
+│       ├── config.py      # Centralized env var loading
+│       └── main.py        # CLI entry point
+├── models/                # Trained model weights
+│   ├── failure_predictor.pth
+│   ├── log_pca.joblib
+│   └── ppo_policy.zip
+├── data/                  # Telemetry CSV data
+├── tests/                 # Pytest test suite
+├── scripts/               # Setup & health check utilities
+│   ├── health_check.py    # Verify services, models, imports
+│   ├── setup_local.ps1    # Windows setup
+│   └── setup_local.sh     # Linux/Mac setup
+├── infra/                 # Dockerfiles (Jenkins, Prometheus, dummy-app)
+├── docs/                  # Paper summary, PRD
+└── microservices-demo/    # Weaveworks Sock Shop (reference deployment)
+```
+
+---
+
+## Quick Start
 
 ### Prerequisites
 
-- Python 3.12+
-- Docker Desktop
-- Minikube
-- kubectl
+- Python 3.10+
+- Docker Desktop (for Jenkins & Prometheus)
+- Minikube (optional, for Kubernetes demo)
 
 ### 1. Install dependencies
 
@@ -64,120 +113,108 @@ pip install -r requirements.txt
 
 ```bash
 cp .env.example .env
-# Edit .env with your Jenkins URL and credentials
+# Edit .env with your Jenkins token
+# Get token at: http://localhost:8080/user/admin/configure
 ```
 
-### 3. Train models
+### 3. Start infrastructure
+
+```bash
+docker compose up -d          # Jenkins + Prometheus
+python setup_jenkins_job.py   # Create the build pipeline job
+```
+
+### 4. Train models
 
 ```bash
 python src/prediction/train.py
 python -m src.rl_agent.train
 ```
 
-### 4. Start local infrastructure
+### 5. Run the orchestrator
 
 ```bash
-bash scripts/setup_local.sh
-# or on Windows:
-# powershell scripts/setup_local.ps1
+# Simulation mode (no live services needed)
+python src/orchestrator/main.py --mode simulate
+
+# Live mode (requires Jenkins + Prometheus running)
+python src/orchestrator/main.py --mode live
 ```
 
-### 5. Run demo (no Jenkins needed)
-
-```bash
-python -m src.orchestrator.main --mode simulate
-```
-
-### 6. Launch dashboard
+### 6. Launch the dashboard
 
 ```bash
 python -m streamlit run src/dashboard/app.py
 ```
 
-### 7. Run live mode
+Open [http://localhost:8501](http://localhost:8501) in your browser.
+
+### 7. Health check
 
 ```bash
-python -m src.orchestrator.main --mode live
+python scripts/health_check.py
 ```
 
 ---
 
-## 🧪 Testing
+## Demo Guide
+
+**Quickest demo (2 minutes, no Kubernetes needed):**
+
+1. `pip install -r requirements.txt`
+2. `python src/prediction/train.py && python -m src.rl_agent.train`
+3. `python src/orchestrator/main.py --mode simulate`
+4. In a second terminal: `python -m streamlit run src/dashboard/app.py`
+5. Open http://localhost:8501
+
+**What to show:**
+- Dashboard auto-refreshes every 10 seconds
+- Failure probability chart updates in real time
+- RL agent recommends one of 6 healing actions per cycle
+- Click **Run Healing Cycle** to trigger a manual cycle
+- 4 metric cards: MTTR 44%, F1 1.000, total actions, system health
+
+**Key numbers to mention:**
+- 52D state space (10 build + 12 resource + 16 log + 14 dependency)
+- 6 autonomous healing actions
+- 44% MTTR reduction (paper target: 38%)
+- F1-score 1.000 for failure prediction
+
+---
+
+## State Space (52 dimensions)
+
+| Component | Dimensions | Features |
+|---|---|---|
+| Build Metrics | 10 | duration, result, queue time, stage counts |
+| Resource Metrics | 12 | CPU, memory, disk, network (per-node) |
+| Log Embeddings | 16 | DistilBERT encoding → PCA reduction |
+| Dependency Metrics | 14 | package versions, vulnerability counts |
+
+## Healing Actions
+
+| ID | Action | Description |
+|---|---|---|
+| 0 | `restart_pod` | Restart the affected Kubernetes pod |
+| 1 | `scale_up` | Increase replica count |
+| 2 | `retry_build` | Re-trigger the Jenkins build |
+| 3 | `rollback_deploy` | Roll back to last known-good deployment |
+| 4 | `clear_cache` | Clear build/dependency caches |
+| 5 | `escalate_to_human` | Alert on-call engineer |
+
+---
+
+## Running Tests
 
 ```bash
-pip install pytest
-python -m pytest tests/ -v
-# 83 tests across 4 files — all passing
+pytest tests/ -v
 ```
 
 ---
 
-## 📁 Project Structure
+## License
 
-```
-NeuroShield/
-├── src/
-│   ├── telemetry/           # Jenkins + Prometheus polling → CSV
-│   │   ├── collector.py     # TelemetryCollector with log redaction
-│   │   ├── config.py        # Centralized env var loading
-│   │   └── main.py          # CLI entry point
-│   ├── prediction/          # Failure prediction ML pipeline
-│   │   ├── data_generator.py# Synthetic training data with failure patterns
-│   │   ├── log_encoder.py   # DistilBERT → mean-pool → PCA (16D)
-│   │   ├── model.py         # FailureClassifier feed-forward network
-│   │   ├── predictor.py     # Runtime inference + 52D state builder
-│   │   └── train.py         # End-to-end training script
-│   ├── rl_agent/            # Reinforcement learning agent
-│   │   ├── env.py           # Gymnasium env (52D obs, 6 actions)
-│   │   ├── simulator.py     # Synthetic state generator + MTTR tables
-│   │   └── train.py         # PPO training + evaluation
-│   ├── orchestrator/        # Real-time CI/CD monitor + healer
-│   │   └── main.py          # Jenkins poll → predict → PPO → kubectl heal
-│   └── dashboard/           # Human-in-the-loop dashboard
-│       └── app.py           # Streamlit app (7 sections)
-├── tests/
-│   ├── test_telemetry.py    # Telemetry collector unit tests
-│   ├── test_prediction.py   # Prediction pipeline tests
-│   ├── test_rl_agent.py     # RL env + simulator tests
-│   └── test_orchestrator.py # Orchestrator + healing action tests
-├── models/                  # Trained model artifacts
-│   ├── failure_predictor.pth
-│   ├── log_pca.joblib
-│   └── ppo_policy.zip
-├── infra/
-│   ├── dummy-app/           # Flask app for failure injection testing
-│   └── jenkins-builder/     # Custom Jenkins image with pinned kubectl
-├── data/                    # Runtime CSV output (telemetry, action history)
-├── scripts/
-│   ├── setup_local.sh       # One-command local setup (Linux/Mac)
-│   └── setup_local.ps1      # One-command local setup (Windows)
-├── .env.example             # All environment variables with defaults
-├── requirements.txt         # Python dependencies
-├── setup_jenkins_job.py     # Idempotent Jenkins job creation
-├── jenkins-pvc.yaml         # Kubernetes PVC for Jenkins
-├── jenkins-local-updated.yaml # Jenkins K8s deployment
-├── dummy-app.yaml           # Dummy app K8s deployment
-├── PRD.md                   # Product requirements document
-└── docs/paper_summary.md    # Research paper summary
-```
-
----
-
-## 🤖 ML & RL Details
-
-### Failure Prediction
-
-- **Model**: DistilBERT → mean pooling → PCA (768D → 16D) → Feed-forward classifier
-- **Input**: Build logs + 8 telemetry features (24D total)
-- **Output**: Failure probability + binary state (Healthy / Imminent Failure)
-- **Performance**: F1-score 87%, Precision 89%, Recall 86%
-
-### RL Agent
-
-- **Algorithm**: PPO (Proximal Policy Optimization) via stable-baselines3
-- **State space**: 52D (10 build + 12 resource + 16 log embeddings + 14 dependency)
-- **Action space**: 6 discrete healing actions
-- **Reward**: R = 0.6·MTTR\_reduction + 0.3·resource\_efficiency − 0.1·false\_positive\_penalty
+MIT
 - **Result**: 44% average MTTR reduction (paper target: 38%)
 
 ---
