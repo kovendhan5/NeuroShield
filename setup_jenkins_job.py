@@ -35,7 +35,7 @@ def main() -> int:
 
     jenkins_url = (os.getenv("JENKINS_URL") or "http://localhost:8080").rstrip("/")
     jenkins_user = os.getenv("JENKINS_USER") or os.getenv("JENKINS_USERNAME") or "admin"
-    jenkins_token = os.getenv("JENKINS_TOKEN") or "admin123"
+    jenkins_token = os.getenv("JENKINS_TOKEN") or ""
 
     auth = HTTPBasicAuth(jenkins_user, jenkins_token)
     session = requests.Session()
