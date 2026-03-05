@@ -1,0 +1,26 @@
+services:
+  jenkins:
+    image: jenkins/jenkins:lts-jdk17
+    container_name: neuroshield-jenkins
+    ports:
+      - "8080:8080"
+      - "50000:50000"
+    volumes:
+      - D:/Docker/jenkins_home:/var/jenkins_home
+    environment:
+      - JAVA_OPTS=-Xmx512m -Xms256m -Djenkins.install.runSetupWizard=false
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/login || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: neuroshield-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    restart: unless-stopped
