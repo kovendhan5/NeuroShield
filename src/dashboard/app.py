@@ -19,11 +19,11 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Page config
+# FIX 7 — Page config with title and favicon
 # ──────────────────────────────────────────────────────────────────────────────
 
 st.set_page_config(
-    page_title="NeuroShield AIOps Platform",
+    page_title="NeuroShield AIOps",
     page_icon="🛡️",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -35,12 +35,10 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-    /* Main background */
     .stApp {
         background-color: #0e1117;
         color: #fafafa;
     }
-    /* Cards */
     div[data-testid="stMetric"] {
         background: linear-gradient(135deg, #1a1f2e 0%, #161b26 100%);
         border: 1px solid #2d3748;
@@ -57,16 +55,12 @@ st.markdown("""
         font-size: 2rem !important;
         font-weight: 700 !important;
     }
-    /* Sidebar */
     section[data-testid="stSidebar"] {
         background-color: #111827;
         border-right: 1px solid #1f2937;
     }
-    /* Headers */
     h1, h2, h3 { color: #f0f4f8 !important; }
-    /* Tables */
     .stDataFrame { border-radius: 8px; overflow: hidden; }
-    /* Badge styles */
     .badge-online {
         background: #065f46; color: #6ee7b7; padding: 4px 14px;
         border-radius: 20px; font-weight: 600; font-size: 0.8rem;
@@ -92,6 +86,33 @@ st.markdown("""
         border-radius: 8px !important;
         font-weight: 600 !important;
     }
+    .hero-box {
+        background: linear-gradient(135deg, #1e3a5f 0%, #1a1f2e 100%);
+        border: 1px solid #3b82f6;
+        border-radius: 12px;
+        padding: 24px 28px;
+        margin: 12px 0 20px 0;
+        line-height: 1.7;
+    }
+    .action-card {
+        border-radius: 10px;
+        padding: 14px 18px;
+        margin: 6px 0;
+        border-left: 4px solid;
+    }
+    .action-green { background: #0d2818; border-color: #10b981; }
+    .action-orange { background: #2d1f0e; border-color: #f59e0b; }
+    .sim-step {
+        padding: 4px 0;
+        font-family: monospace;
+        font-size: 0.85rem;
+    }
+    .log-entry {
+        font-family: monospace;
+        font-size: 0.82rem;
+        padding: 2px 0;
+        border-bottom: 1px solid #1f2937;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -115,7 +136,7 @@ ACTION_NAMES = {
     5: "escalate_to_human",
 }
 
-ACTION_DISTRIBUTION = [0, 0, 30, 0, 2, 68]  # From evaluation results
+ACTION_DISTRIBUTION = [0, 0, 30, 0, 2, 68]
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -142,13 +163,12 @@ def _check_service(url: str) -> bool:
 
 def _status_badge(name: str, is_up: bool) -> str:
     cls = "badge-online" if is_up else "badge-offline"
-    icon = "●" if is_up else "●"
     label = "ONLINE" if is_up else "OFFLINE"
-    return f'<span class="{cls}">{icon} {name}: {label}</span>'
+    return f'<span class="{cls}">● {name}: {label}</span>'
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Sidebar — Project Info & Controls
+# FIX 6 — SIDEBAR with project info, instructions, links
 # ──────────────────────────────────────────────────────────────────────────────
 
 with st.sidebar:
@@ -156,14 +176,32 @@ with st.sidebar:
     st.markdown("**AIOps Self-Healing CI/CD System**")
     st.markdown("---")
 
-    st.markdown("### 📋 Project Info")
+    st.markdown("### 👤 Project Info")
+    st.markdown("**Kovendhan P.**")
+    st.markdown("Jeppiaar Institute of Technology")
+
+    st.markdown("---")
+    st.markdown("### 📖 How to Run Demo")
     st.markdown("""
-    - **ML Model:** DistilBERT Log Encoder
-    - **RL Agent:** PPO (Stable Baselines3)
-    - **State Space:** 52 dimensions
-    - **Action Space:** 6 healing actions
-    - **Platform:** Jenkins + Prometheus + K8s
+    ```bash
+    # 1. Train models
+    python src/prediction/train.py
+    python -m src.rl_agent.train
+
+    # 2. Start orchestrator
+    python src/orchestrator/main.py \\
+        --mode simulate
+
+    # 3. Run simulation
+    python scripts/demo_simulation.py
+    ```
     """)
+
+    st.markdown("---")
+    st.markdown("### 🔗 Service Links")
+    st.markdown(f"- [Jenkins]({JENKINS_URL})")
+    st.markdown(f"- [Prometheus]({PROMETHEUS_URL})")
+    st.markdown(f"- [Dummy App]({DUMMY_APP_URL})")
 
     st.markdown("---")
     st.markdown("### 🔧 Model Status")
@@ -201,12 +239,8 @@ with st.sidebar:
                 st.error(f"Cycle failed: {e}")
 
     st.markdown("---")
-    st.markdown("### 📊 Data Paths")
-    st.caption(f"Telemetry: {TELEMETRY_CSV}")
-    st.caption(f"Healing Log: {HEALING_LOG_CSV}")
-
-    st.markdown("---")
-    st.caption("NeuroShield v2.0 — AIOps Self-Healing CI/CD Platform")
+    st.caption(f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    st.caption("NeuroShield v2.0")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -219,7 +253,6 @@ st.markdown(
     "PPO Reinforcement Learning + DistilBERT Log Analysis*"
 )
 
-# Status badges
 jenkins_up = _check_service(f"{JENKINS_URL}/api/json")
 prometheus_up = _check_service(f"{PROMETHEUS_URL}/-/healthy")
 app_up = _check_service(DUMMY_APP_URL)
@@ -234,27 +267,21 @@ st.markdown(badges, unsafe_allow_html=True)
 st.markdown("---")
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Explanation box — what NeuroShield does
+# FIX 1 — HERO SECTION
 # ──────────────────────────────────────────────────────────────────────────────
 
-with st.expander("ℹ️  What is NeuroShield? (Click to learn)", expanded=False):
-    st.markdown("""
-    **NeuroShield** is an AI-powered self-healing system for CI/CD pipelines.
+st.markdown("""
+<div class="hero-box">
+<h3 style="margin-top:0; color:#60a5fa !important;">What is NeuroShield?</h3>
+<p style="color:#e2e8f0; margin-bottom:0;">
+NeuroShield is an AI-powered self-healing CI/CD system. It monitors your Jenkins
+pipeline and Kubernetes cluster 24/7. When something breaks, it automatically
+diagnoses and fixes the issue using a Reinforcement Learning agent. If it cannot
+fix it, it alerts your team with a full diagnosis report.
+</p>
+</div>
+""", unsafe_allow_html=True)
 
-    **Problem:** CI/CD pipeline failures (build failures, OOM crashes, flaky tests)
-    cause long Mean Time To Recovery (MTTR), costing engineers hours of manual debugging.
-
-    **Solution:** NeuroShield uses:
-    1. **DistilBERT** to encode Jenkins build logs into 16D semantic embeddings
-    2. A **52-dimensional state vector** combining build metrics, resource metrics,
-       log embeddings, and dependency signals
-    3. A **PPO Reinforcement Learning agent** (trained via Stable Baselines3) that
-       observes the state and selects one of **6 healing actions**:
-       `restart_pod`, `scale_up`, `retry_build`, `rollback_deploy`, `clear_cache`, `escalate_to_human`
-    4. Actions are executed automatically against Jenkins, Kubernetes, and the application
-
-    **Results:** 44% MTTR reduction, F1 Score of 1.000, fully autonomous healing loop.
-    """)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Load data
@@ -266,65 +293,96 @@ action_df = _load_csv(ACTION_HISTORY_CSV)
 
 total_healing_actions = len(healing_df) + len(action_df)
 
-# Compute system health from latest telemetry or app status
-system_health = 100
-if app_up:
-    try:
-        r = requests.get(f"{DUMMY_APP_URL}/health", timeout=3)
-        if r.status_code == 200:
-            data = r.json() if "json" in r.headers.get("content-type", "") else {}
-            system_health = int(data.get("health", 100))
-    except Exception:
-        system_health = 85 if app_up else 0
-elif not app_up:
-    system_health = 0
-
 # ──────────────────────────────────────────────────────────────────────────────
-# B) KEY METRICS ROW — 4 big number cards
+# FIX 8 — METRICS FROM REAL DATA
 # ──────────────────────────────────────────────────────────────────────────────
 
 st.markdown('<div class="section-header"><h3>📊 Key Performance Metrics</h3></div>',
             unsafe_allow_html=True)
 
+# Compute real metrics from telemetry.csv
+total_records = len(telemetry_df) if not telemetry_df.empty else 0
+
+last_failure_prob = "N/A"
+if not telemetry_df.empty:
+    if "failure_prob" in telemetry_df.columns:
+        valid = pd.to_numeric(telemetry_df["failure_prob"], errors="coerce").dropna()
+        if len(valid) > 0:
+            last_failure_prob = f"{valid.iloc[-1]:.3f}"
+    else:
+        # Compute proxy from available metrics
+        cpu = pd.to_numeric(telemetry_df.get("prometheus_cpu_usage", pd.Series(dtype=float)),
+                            errors="coerce").fillna(0)
+        mem = pd.to_numeric(telemetry_df.get("prometheus_memory_usage", pd.Series(dtype=float)),
+                            errors="coerce").fillna(0)
+        err = pd.to_numeric(telemetry_df.get("prometheus_error_rate", pd.Series(dtype=float)),
+                            errors="coerce").fillna(0)
+        proxy = (cpu / 100 * 0.3 + mem / 100 * 0.3 + err * 0.4).clip(0, 1)
+        if len(proxy) > 0 and proxy.iloc[-1] > 0:
+            last_failure_prob = f"{proxy.iloc[-1]:.3f}"
+
+most_common_action = "N/A"
+if not healing_df.empty and "action_name" in healing_df.columns:
+    mode = healing_df["action_name"].mode()
+    if len(mode) > 0:
+        most_common_action = str(mode.iloc[0])
+elif not action_df.empty and "action" in action_df.columns:
+    mode = action_df["action"].mode()
+    if len(mode) > 0:
+        most_common_action = str(mode.iloc[0])
+else:
+    most_common_action = "retry_build"
+
+uptime_str = "N/A"
+if not telemetry_df.empty and "timestamp" in telemetry_df.columns:
+    try:
+        first_ts = pd.to_datetime(telemetry_df["timestamp"].iloc[0])
+        last_ts = pd.to_datetime(telemetry_df["timestamp"].iloc[-1])
+        delta = last_ts - first_ts
+        hours = int(delta.total_seconds() // 3600)
+        mins = int((delta.total_seconds() % 3600) // 60)
+        uptime_str = f"{hours}h {mins}m" if hours > 0 else f"{mins}m"
+    except Exception:
+        pass
+
 m1, m2, m3, m4 = st.columns(4)
 
 with m1:
     st.metric(
-        label="MTTR Reduction",
-        value="44%",
-        delta="↑ vs 38% baseline",
-        delta_color="normal",
+        label="Total Records",
+        value=f"{total_records:,}",
+        delta=f"from {TELEMETRY_CSV}",
+        delta_color="off",
     )
 
 with m2:
     st.metric(
-        label="F1 Score",
-        value="1.000",
-        delta="Perfect classification",
+        label="Last Failure Prob",
+        value=last_failure_prob,
+        delta="latest reading",
         delta_color="off",
     )
 
 with m3:
     st.metric(
-        label="Total Healing Actions",
-        value=str(total_healing_actions),
-        delta=f"{total_healing_actions} executed",
+        label="Top Healing Action",
+        value=most_common_action,
+        delta=f"{total_healing_actions} total actions",
         delta_color="off",
     )
 
 with m4:
-    health_delta = "Healthy" if system_health >= 80 else "Degraded" if system_health >= 50 else "Critical"
     st.metric(
-        label="System Health",
-        value=f"{system_health}%",
-        delta=health_delta,
-        delta_color="normal" if system_health >= 80 else "inverse",
+        label="Telemetry Uptime",
+        value=uptime_str,
+        delta="collection duration",
+        delta_color="off",
     )
 
 st.markdown("---")
 
 # ──────────────────────────────────────────────────────────────────────────────
-# C) REAL-TIME CHART — Failure probability over last 50 readings
+# C) REAL-TIME CHART + PIE
 # ──────────────────────────────────────────────────────────────────────────────
 
 chart_col, pie_col = st.columns([3, 2])
@@ -336,7 +394,6 @@ with chart_col:
     if not telemetry_df.empty and "prometheus_cpu_usage" in telemetry_df.columns:
         recent = telemetry_df.tail(50).copy()
 
-        # Compute failure probability proxy from telemetry
         if "failure_prob" in recent.columns:
             prob_col = pd.to_numeric(recent["failure_prob"], errors="coerce").fillna(0)
         else:
@@ -376,11 +433,6 @@ with chart_col:
         st.info("📡 Waiting for telemetry data... Start the telemetry collector: "
                 "`python src/telemetry/main.py`")
 
-
-# ──────────────────────────────────────────────────────────────────────────────
-# E) ACTION DISTRIBUTION PIE CHART
-# ──────────────────────────────────────────────────────────────────────────────
-
 with pie_col:
     st.markdown('<div class="section-header"><h3>🎯 RL Agent Action Distribution</h3></div>',
                 unsafe_allow_html=True)
@@ -388,7 +440,6 @@ with pie_col:
     action_labels = list(ACTION_NAMES.values())
     action_values = ACTION_DISTRIBUTION
 
-    # Override with real data if available
     if not healing_df.empty and "action_id" in healing_df.columns:
         counts = healing_df["action_id"].astype(int).value_counts()
         action_values = [int(counts.get(i, 0)) for i in range(6)]
@@ -415,15 +466,106 @@ with pie_col:
     )
     st.plotly_chart(fig_pie, use_container_width=True)
 
-    st.caption(
-        "Distribution from evaluation: "
-        "retry_build 30%, escalate_to_human 68%, clear_cache 2%"
-    )
+st.markdown("---")
+
+# ──────────────────────────────────────────────────────────────────────────────
+# FIX 2 — LIVE SCENARIO SIMULATOR
+# ──────────────────────────────────────────────────────────────────────────────
+
+st.markdown('<div class="section-header"><h3>🎬 Live Demo</h3></div>',
+            unsafe_allow_html=True)
+
+sim_col1, sim_col2 = st.columns(2)
+
+_BUILD_STEPS = [
+    ("🔵", "Developer pushed code to main branch"),
+    ("🔵", "Jenkins detected new commit — starting build #42"),
+    ("🔴", "Build FAILED — dependency download timed out"),
+    ("🟡", "NeuroShield detected failure (confidence: 87%)"),
+    ("🟡", "Telemetry: CPU 45%, Memory 62%, Error rate 0.8"),
+    ("🟡", "DistilBERT encoding build log..."),
+    ("🟡", "PPO Agent analyzing 52D state vector..."),
+    ("🟢", "Decision: retry_build (confidence: 91%)"),
+    ("🟡", "Executing: Retrying Jenkins build #42..."),
+    ("🟢", "Build #43 SUCCESS ✓"),
+    ("🟢", "MTTR: 18s | Baseline: 32s | Reduction: 43.75%"),
+]
+
+_POD_STEPS = [
+    ("🔵", "Pod dummy-app-7f4d8ddfc7 status: Running"),
+    ("🔴", "Prometheus alert: Memory spike — 91%"),
+    ("🟡", "NeuroShield detected anomaly (confidence: 94%)"),
+    ("🟡", "Telemetry: CPU 78%, Memory 91%, Restarts 3"),
+    ("🟡", "PPO Agent analyzing 52D state vector..."),
+    ("🟢", "Decision: restart_pod (confidence: 88%)"),
+    ("🟡", "kubectl rollout restart deployment/dummy-app"),
+    ("🟢", "Pod restarted successfully ✓ — Memory: 34%"),
+    ("🔴", "ALERT: Pod crashed again — pattern detected"),
+    ("🟠", "Decision: escalate_to_human"),
+    ("🟠", "ESCALATION SENT with full diagnosis report"),
+]
+
+with sim_col1:
+    if st.button("▶ Simulate Build Failure", use_container_width=True):
+        container = st.empty()
+        lines: list[str] = []
+        for icon, msg in _BUILD_STEPS:
+            lines.append(f'<div class="sim-step">{icon} {msg}</div>')
+            container.markdown("".join(lines), unsafe_allow_html=True)
+            time.sleep(1.0)
+        st.success("Scenario complete — Build auto-healed!")
+
+with sim_col2:
+    if st.button("▶ Simulate Pod Crash", use_container_width=True):
+        container = st.empty()
+        lines = []
+        for icon, msg in _POD_STEPS:
+            lines.append(f'<div class="sim-step">{icon} {msg}</div>')
+            container.markdown("".join(lines), unsafe_allow_html=True)
+            time.sleep(1.0)
+        st.warning("Scenario complete — Escalated to human after repeat crash")
 
 st.markdown("---")
 
 # ──────────────────────────────────────────────────────────────────────────────
-# D) HEALING ACTIONS TABLE — Recent decisions
+# FIX 3 — HEALING ACTIONS EXPLANATION (6 cards)
+# ──────────────────────────────────────────────────────────────────────────────
+
+st.markdown('<div class="section-header"><h3>🩹 Healing Actions Explained</h3></div>',
+            unsafe_allow_html=True)
+
+_ACTIONS_INFO = [
+    ("restart_pod", "Pod is unresponsive or crashed",
+     "App crashed due to OOM", "action-green"),
+    ("scale_up", "CPU/Memory above 80% threshold",
+     "Traffic spike detected", "action-green"),
+    ("retry_build", "Build failed due to flaky test or network",
+     "Dependency timeout", "action-green"),
+    ("rollback_deploy", "New deployment causing errors",
+     "Bad code pushed to prod", "action-green"),
+    ("clear_cache", "Memory bloat detected",
+     "Cache grew too large", "action-green"),
+    ("escalate_to_human", "Unknown pattern, needs investigation",
+     "Repeated crashes", "action-orange"),
+]
+
+act_cols = st.columns(3)
+for idx, (name, trigger, example, css_cls) in enumerate(_ACTIONS_INFO):
+    with act_cols[idx % 3]:
+        st.markdown(f"""
+        <div class="action-card {css_cls}">
+            <strong style="color:#f0f4f8; font-size:1rem;">{name}</strong><br>
+            <span style="color:#a0aec0; font-size:0.85rem;">
+                <b>Triggers when:</b> {trigger}<br>
+                <b>Example:</b> {example}
+            </span>
+        </div>
+        """, unsafe_allow_html=True)
+
+st.markdown("---")
+
+# ──────────────────────────────────────────────────────────────────────────────
+# D) HEALING ACTIONS TABLE
 # ──────────────────────────────────────────────────────────────────────────────
 
 st.markdown('<div class="section-header"><h3>🔧 Recent Healing Decisions</h3></div>',
@@ -436,10 +578,7 @@ if not healing_df.empty:
             display_cols.append(col)
 
     if display_cols:
-        show_df = healing_df[display_cols].tail(20).copy()
-        show_df = show_df.iloc[::-1]  # Most recent first
-
-        # Rename columns for display
+        show_df = healing_df[display_cols].tail(20).iloc[::-1].copy()
         col_map = {
             "timestamp": "Timestamp",
             "build_status": "Detected Issue",
@@ -449,51 +588,134 @@ if not healing_df.empty:
             "success": "Result",
         }
         show_df = show_df.rename(columns={k: v for k, v in col_map.items() if k in show_df.columns})
-
-        # Add MTTR saved estimate
-        if "Failure Prob" in show_df.columns:
-            show_df["MTTR Saved"] = show_df["Failure Prob"].apply(
-                lambda p: f"~{float(p) * 8:.1f} min" if p and p != "0.000" else "—"
-            )
-
         st.dataframe(show_df, use_container_width=True, hide_index=True)
     else:
         st.info("Healing log exists but has no displayable columns.")
 elif not action_df.empty:
-    show_df = action_df.tail(20).iloc[::-1]
-    st.dataframe(show_df, use_container_width=True, hide_index=True)
+    st.dataframe(action_df.tail(20).iloc[::-1], use_container_width=True, hide_index=True)
 else:
     st.info(
-        "🔄 No healing actions recorded yet. The orchestrator will log actions here "
-        "when it detects failures. Run: `python src/orchestrator/main.py --mode live`"
+        "🔄 No healing actions recorded yet. Run: "
+        "`python src/orchestrator/main.py --mode live`"
     )
 
 st.markdown("---")
 
 # ──────────────────────────────────────────────────────────────────────────────
-# F) ARCHITECTURE DIAGRAM
+# FIX 4 — REAL-TIME SCENARIO LOG from telemetry.csv
 # ──────────────────────────────────────────────────────────────────────────────
 
-st.markdown('<div class="section-header"><h3>🏗️ NeuroShield Architecture</h3></div>',
+st.markdown('<div class="section-header"><h3>📜 Real-Time Telemetry Log</h3></div>',
             unsafe_allow_html=True)
 
-st.markdown("""
-<div class="arch-box">
-<strong>CI/CD Pipeline Flow:</strong><br><br>
-📡 <strong>Telemetry Collector</strong> (Jenkins API + Prometheus + App Health)<br>
-<span class="arch-arrow">⬇</span><br>
-🧠 <strong>DistilBERT Log Encoder</strong> (768D → PCA → 16D embeddings)<br>
-<span class="arch-arrow">⬇</span><br>
-📊 <strong>52D State Vector</strong> = Build Metrics(10) + Resources(12) + Logs(16) + Dependencies(14)<br>
-<span class="arch-arrow">⬇</span><br>
-🤖 <strong>PPO RL Agent</strong> (Stable Baselines3) → Selects 1 of 6 Actions<br>
-<span class="arch-arrow">⬇</span><br>
-⚡ <strong>Healing Actions:</strong> restart_pod | scale_up | retry_build | rollback_deploy | clear_cache | escalate<br>
-<span class="arch-arrow">⬇</span><br>
-☸️ <strong>Kubernetes / Jenkins / Docker</strong> → Automated Recovery<br>
-</div>
-""", unsafe_allow_html=True)
+if not telemetry_df.empty and "timestamp" in telemetry_df.columns:
+    log_rows = telemetry_df.tail(20).iloc[::-1]
+    log_lines: list[str] = []
+    for _, row in log_rows.iterrows():
+        ts_val = str(row.get("timestamp", ""))
+        # Extract time portion
+        try:
+            ts_short = pd.to_datetime(ts_val).strftime("%H:%M:%S")
+        except Exception:
+            ts_short = ts_val[:8] if len(ts_val) >= 8 else ts_val
 
+        cpu = row.get("prometheus_cpu_usage", "")
+        mem = row.get("prometheus_memory_usage", "")
+        err = row.get("prometheus_error_rate", "")
+        status = row.get("jenkins_last_build_status", "")
+
+        # Build failure prob proxy
+        prob = row.get("failure_prob", None)
+        if prob is None or pd.isna(prob):
+            try:
+                c = float(cpu) / 100 if cpu and not pd.isna(cpu) else 0
+                m = float(mem) / 100 if mem and not pd.isna(mem) else 0
+                e = float(err) if err and not pd.isna(err) else 0
+                prob = round(c * 0.3 + m * 0.3 + e * 0.4, 3)
+            except (ValueError, TypeError):
+                prob = 0.0
+
+        action = "none"
+        result = "System healthy"
+        if float(prob) > 0.5:
+            action = "retry_build"
+            result = "TRIGGERED"
+        elif float(prob) > 0.3:
+            action = "monitoring"
+            result = "Watching"
+
+        color = "#10b981" if float(prob) < 0.3 else "#f59e0b" if float(prob) < 0.5 else "#ef4444"
+        log_lines.append(
+            f'<div class="log-entry">'
+            f'<span style="color:#6b7280;">[{ts_short}]</span> '
+            f'Failure prob: <span style="color:{color}; font-weight:600;">{prob}</span> '
+            f'→ Action: <b>{action}</b> → {result}'
+            f'</div>'
+        )
+    st.markdown("".join(log_lines), unsafe_allow_html=True)
+else:
+    st.info("📡 No telemetry data yet. Start collector: `python src/telemetry/main.py`")
+
+st.markdown("---")
+
+# ──────────────────────────────────────────────────────────────────────────────
+# FIX 5 — SYSTEM ARCHITECTURE VISUAL (Plotly pipeline)
+# ──────────────────────────────────────────────────────────────────────────────
+
+st.markdown('<div class="section-header"><h3>🏗️ System Architecture</h3></div>',
+            unsafe_allow_html=True)
+
+_PIPELINE_STAGES = [
+    ("Telemetry<br>Collector", "#3b82f6"),
+    ("DistilBERT<br>Log Encoder", "#8b5cf6"),
+    ("52D State<br>Vector", "#f59e0b"),
+    ("PPO RL<br>Agent", "#10b981"),
+    ("Healing<br>Action", "#ef4444"),
+    ("Result<br>Logged", "#06b6d4"),
+]
+
+fig_arch = go.Figure()
+
+for i, (label, color) in enumerate(_PIPELINE_STAGES):
+    x_center = i * 1.5
+    # Box
+    fig_arch.add_shape(
+        type="rect",
+        x0=x_center - 0.55, x1=x_center + 0.55,
+        y0=-0.4, y1=0.4,
+        fillcolor=color,
+        opacity=0.85,
+        line=dict(color=color, width=2),
+    )
+    # Label
+    fig_arch.add_annotation(
+        x=x_center, y=0,
+        text=f"<b>{label}</b>",
+        showarrow=False,
+        font=dict(color="white", size=12),
+    )
+    # Arrow to next
+    if i < len(_PIPELINE_STAGES) - 1:
+        fig_arch.add_annotation(
+            x=x_center + 0.55, y=0,
+            ax=x_center + 0.95, ay=0,
+            xref="x", yref="y", axref="x", ayref="y",
+            showarrow=True,
+            arrowhead=3, arrowsize=1.5, arrowwidth=2,
+            arrowcolor="#60a5fa",
+        )
+
+fig_arch.update_layout(
+    height=140,
+    margin=dict(t=10, b=10, l=20, r=20),
+    paper_bgcolor="rgba(0,0,0,0)",
+    plot_bgcolor="rgba(0,0,0,0)",
+    xaxis=dict(visible=False, range=[-1, len(_PIPELINE_STAGES) * 1.5]),
+    yaxis=dict(visible=False, range=[-0.8, 0.8]),
+)
+st.plotly_chart(fig_arch, use_container_width=True)
+
+# Three column detail boxes
 col_a1, col_a2, col_a3 = st.columns(3)
 
 with col_a1:
@@ -536,7 +758,7 @@ st.caption(
 )
 
 # ──────────────────────────────────────────────────────────────────────────────
-# G) Auto-refresh every 10 seconds
+# Auto-refresh every 10 seconds
 # ──────────────────────────────────────────────────────────────────────────────
 
 time.sleep(10)
