@@ -217,7 +217,7 @@ with left_col:
         },
     ))
     gauge.update_layout(height=250, margin=dict(t=50, b=10, l=30, r=30))
-    st.plotly_chart(gauge, use_container_width=True)
+    st.plotly_chart(gauge, width="stretch")
 
     if prob >= 0.7:
         st.error("⚠️ IMMINENT FAILURE PREDICTED")
@@ -342,7 +342,7 @@ with right_col:
         height=350,
         margin=dict(t=50, b=30, l=120, r=40),
     )
-    st.plotly_chart(fig_shap, use_container_width=True)
+    st.plotly_chart(fig_shap, width="stretch")
 
 st.markdown("---")
 
@@ -371,7 +371,7 @@ with chart_left:
             xaxis_title="Time", yaxis_title="MTTR Reduction %",
             height=350, margin=dict(t=30, b=30),
         )
-        st.plotly_chart(fig_mttr, use_container_width=True)
+        st.plotly_chart(fig_mttr, width="stretch")
     else:
         st.info("No action history yet — MTTR trend will appear after healing actions run.")
 
@@ -398,7 +398,7 @@ with chart_right:
         hole=0.35,
     ))
     fig_pie.update_layout(height=350, margin=dict(t=30, b=30))
-    st.plotly_chart(fig_pie, use_container_width=True)
+    st.plotly_chart(fig_pie, width="stretch")
 
 st.markdown("---")
 
@@ -424,7 +424,7 @@ else:
         return [""] * len(row)
 
     styled = display_df.style.apply(_row_bg, axis=1)
-    st.dataframe(styled, use_container_width=True)
+    st.dataframe(styled, width="stretch")
 
 # ── Pending escalations ──────────────────────────────────────────────────────
 
