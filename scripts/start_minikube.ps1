@@ -1,4 +1,4 @@
-# NeuroShield — Start Minikube + Deploy Dummy App
+# NeuroShield -- Start Minikube + Deploy Dummy App
 Write-Host "Setting up Minikube..." -ForegroundColor Cyan
 
 # Check Docker is running first
@@ -6,7 +6,7 @@ try {
     docker info 2>&1 | Out-Null
     Write-Host "[OK] Docker is running" -ForegroundColor Green
 } catch {
-    Write-Host "[FAIL] Docker is not running — start Docker Desktop first" -ForegroundColor Red
+    Write-Host "[FAIL] Docker is not running -- start Docker Desktop first" -ForegroundColor Red
     exit 1
 }
 
@@ -50,7 +50,7 @@ kubectl wait --for=condition=ready pod -l app=dummy-app --timeout=90s
 if ($LASTEXITCODE -eq 0) {
     Write-Host "[OK] dummy-app deployed" -ForegroundColor Green
 } else {
-    Write-Host "[WARN] Pod not ready yet — check: kubectl get pods" -ForegroundColor Yellow
+    Write-Host "[WARN] Pod not ready yet -- check: kubectl get pods" -ForegroundColor Yellow
 }
 
 # Port-forward dummy-app
