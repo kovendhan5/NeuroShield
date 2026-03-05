@@ -7,11 +7,17 @@ import json
 import logging
 import os
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, Optional, Tuple, TypeVar
+
+# Ensure project root is on sys.path for direct invocation
+_PROJECT_ROOT = str(Path(__file__).resolve().parents[2])
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
 import numpy as np
 import requests
