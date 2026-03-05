@@ -206,8 +206,7 @@ with st.sidebar:
     st.caption(f"Healing Log: {HEALING_LOG_CSV}")
 
     st.markdown("---")
-    st.caption("NeuroShield v2.0 — B.Tech Final Year Project")
-    st.caption("Jeppiaar Institute of Technology")
+    st.caption("NeuroShield v2.0 — AIOps Self-Healing CI/CD Platform")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -533,8 +532,7 @@ st.markdown("---")
 st.caption(
     "NeuroShield AIOps Platform v2.0 — "
     "PPO Reinforcement Learning · DistilBERT Log Encoding · "
-    "52D State Space · 6 Healing Actions — "
-    "Jeppiaar Institute of Technology"
+    "52D State Space · 6 Healing Actions"
 )
 
 # ──────────────────────────────────────────────────────────────────────────────
