@@ -3,8 +3,15 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 from typing import List, Tuple
+
+# Ensure project root is on sys.path for direct invocation
+_PROJECT_ROOT = str(Path(__file__).resolve().parents[2])
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
 import numpy as np
 import torch
 from torch import nn
@@ -12,10 +19,10 @@ from torch.utils.data import DataLoader, TensorDataset
 from sklearn.metrics import f1_score
 from sklearn.model_selection import train_test_split
 
-from .data_generator import generate_dataset, split_logs_and_telemetry
-from .log_encoder import LogEncoder
-from .model import FailureClassifier
-from .predictor import telemetry_to_vector
+from src.prediction.data_generator import generate_dataset, split_logs_and_telemetry
+from src.prediction.log_encoder import LogEncoder
+from src.prediction.model import FailureClassifier
+from src.prediction.predictor import telemetry_to_vector
 
 
 def _build_feature_matrix(log_embeddings: np.ndarray, telemetry: List[dict]) -> np.ndarray:

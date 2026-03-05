@@ -117,7 +117,7 @@ Write-Host "    Terminal 2 - Orchestrator (simulate mode):" -ForegroundColor Whi
 Write-Host "      python -m src.orchestrator.main --mode simulate" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "    Terminal 3 - Dashboard:" -ForegroundColor White
-Write-Host "      streamlit run src/dashboard/app.py" -ForegroundColor Cyan
+Write-Host "      python -m streamlit run src/dashboard/app.py" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "    Then open: http://localhost:8501" -ForegroundColor Yellow
 Write-Host ""

@@ -59,7 +59,7 @@ Write-Host "  Terminal 2 -- Orchestrator (simulate):" -ForegroundColor Yellow
 Write-Host "    python src/orchestrator/main.py --mode simulate" -ForegroundColor Yellow
 Write-Host ""
 Write-Host "  Terminal 3 -- Dashboard:" -ForegroundColor Yellow
-Write-Host "    streamlit run src/dashboard/app.py" -ForegroundColor White
+Write-Host "    python -m streamlit run src/dashboard/app.py" -ForegroundColor White
 Write-Host ""
 Write-Host "  Dashboard URL: http://localhost:8501" -ForegroundColor Cyan
 Write-Host "  Jenkins URL:   http://localhost:8080" -ForegroundColor Cyan
