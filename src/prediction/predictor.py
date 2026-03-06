@@ -143,7 +143,16 @@ class FailurePredictor:
         with torch.no_grad():
             logits = self.classifier(tensor).squeeze(0)
             prob = torch.sigmoid(logits).item()
-        return float(prob)
+        prob = self._apply_status_boost(float(prob), telemetry)
+        return prob
+
+    def _apply_status_boost(self, prob: float, telemetry: TelemetryInput) -> float:
+        """Boost probability for FAILURE builds when model signal is too weak."""
+        tdict = resolve_telemetry(telemetry)
+        status = str(tdict.get("jenkins_last_build_status", "")).upper()
+        if status in ("FAILURE", "UNSTABLE", "ABORTED") and prob < 0.5:
+            return max(prob, 0.65)
+        return prob
 
     def predict_with_state(
         self,
@@ -156,7 +165,8 @@ class FailurePredictor:
         with torch.no_grad():
             logits = self.classifier(tensor).squeeze(0)
             prob = torch.sigmoid(logits).item()
-        return float(prob), state_vector
+        prob = self._apply_status_boost(float(prob), telemetry)
+        return prob, state_vector
 
 
 def predict(log_text: str, telemetry: TelemetryInput = None) -> float:
