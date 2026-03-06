@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import time
@@ -473,6 +474,161 @@ st.markdown("---")
 # ──────────────────────────────────────────────────────────────────────────────
 
 st.markdown('<div class="section-header"><h3>🎬 Live Demo</h3></div>',
+            unsafe_allow_html=True)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# LIVE DEMO CONTROL PANEL — real buttons that hit real services
+# ──────────────────────────────────────────────────────────────────────────────
+
+ctrl_col1, ctrl_col2, ctrl_col3, ctrl_col4 = st.columns(4)
+
+JENKINS_JOB_NAME = os.getenv("JENKINS_JOB", "neuroshield-app-build")
+
+
+def _jenkins_auth():
+    u = os.getenv("JENKINS_USERNAME") or os.getenv("JENKINS_USER") or "admin"
+    p = os.getenv("JENKINS_PASSWORD") or os.getenv("JENKINS_TOKEN") or "admin123"
+    return (u, p)
+
+
+def _jenkins_crumb(session):
+    try:
+        r = session.get(f"{JENKINS_URL}/crumbIssuer/api/json", timeout=5)
+        if r.status_code == 200:
+            d = r.json()
+            session.headers[d["crumbRequestField"]] = d["crumb"]
+    except Exception:
+        pass
+
+
+with ctrl_col1:
+    if st.button("🔨 Trigger Build Failure", use_container_width=True):
+        try:
+            s = requests.Session()
+            s.auth = _jenkins_auth()
+            _jenkins_crumb(s)
+            r = s.post(f"{JENKINS_URL}/job/{JENKINS_JOB_NAME}/build", timeout=10)
+            if r.status_code in {200, 201, 202, 301, 302}:
+                st.success(f"Build triggered on '{JENKINS_JOB_NAME}' — check Jenkins UI")
+            else:
+                st.error(f"Jenkins returned {r.status_code}")
+        except Exception as e:
+            st.error(f"Jenkins unreachable: {e}")
+
+with ctrl_col2:
+    if st.button("💀 Crash the Pod", use_container_width=True):
+        try:
+            requests.post(f"{DUMMY_APP_URL}/crash", timeout=5)
+            st.warning("Crash signal sent — pod will restart")
+        except Exception:
+            st.warning("Crash sent (connection dropped = pod died)")
+
+with ctrl_col3:
+    if st.button("🔥 Stress Memory", use_container_width=True):
+        try:
+            r = requests.get(f"{DUMMY_APP_URL}/stress", timeout=10)
+            if r.status_code == 200:
+                data = r.json()
+                st.info(f"Stress: {data.get('memory_before_mb', '?')}→{data.get('memory_after_mb', '?')} MB "
+                        f"for {data.get('duration_seconds', 30)}s")
+            else:
+                st.error(f"Stress endpoint returned {r.status_code}")
+        except Exception as e:
+            st.error(f"App unreachable: {e}")
+
+with ctrl_col4:
+    if st.button("🚫 Bad Deployment", use_container_width=True):
+        import subprocess as _sp
+        r1 = _sp.run(["kubectl", "set", "env", "deployment/dummy-app",
+                       "APP_VERSION=v2-broken", "-n", "default"],
+                      capture_output=True, text=True, timeout=30)
+        _sp.run(["kubectl", "patch", "deployment", "dummy-app", "-n", "default",
+                 "-p", '{"spec":{"template":{"metadata":{"annotations":{"bad":"true"}}}}}'],
+                capture_output=True, text=True, timeout=30)
+        if r1.returncode == 0:
+            st.error("Deployed v2-broken — /health will return 500")
+        else:
+            st.error(f"kubectl error: {r1.stderr[:200]}")
+
+# ── Pod Status Widget (real kubectl) ─────────────────────────────────────
+st.markdown('<div class="section-header"><h3>🖥️ Live Infrastructure Status</h3></div>',
+            unsafe_allow_html=True)
+
+infra_col1, infra_col2 = st.columns(2)
+
+with infra_col1:
+    st.markdown("**Pod Status** (kubectl get pods)")
+    try:
+        import subprocess as _sp
+        pods_result = _sp.run(
+            ["kubectl", "get", "pods", "-n", "default", "-l", "app=dummy-app", "-o", "wide"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if pods_result.returncode == 0 and pods_result.stdout.strip():
+            st.code(pods_result.stdout.strip(), language="text")
+        else:
+            st.info("No pods found or kubectl not available")
+    except Exception:
+        st.info("kubectl not available")
+
+with infra_col2:
+    st.markdown("**Jenkins Build History** (last 5 builds)")
+    try:
+        jr = requests.get(
+            f"{JENKINS_URL}/job/{JENKINS_JOB_NAME}/api/json?tree=builds[number,result,timestamp,duration]{{0,5}}",
+            auth=_jenkins_auth(), timeout=5,
+        )
+        if jr.status_code == 200:
+            builds = jr.json().get("builds", [])
+            if builds:
+                rows = []
+                for b in builds:
+                    result_str = b.get("result") or "RUNNING"
+                    icon = "✅" if result_str == "SUCCESS" else "❌" if result_str == "FAILURE" else "⏳"
+                    rows.append(f"{icon}  #{b['number']}  {result_str}  ({b.get('duration', 0)}ms)")
+                st.code("\n".join(rows), language="text")
+            else:
+                st.info("No builds yet")
+        else:
+            st.info(f"Jenkins returned {jr.status_code}")
+    except Exception as e:
+        st.info(f"Jenkins unreachable: {e}")
+
+# ── Healing Status Indicator ─────────────────────────────────────────────
+healing_log_json = Path("data/healing_log.json")
+is_healing = False
+if healing_log_json.exists():
+    try:
+        lines = healing_log_json.read_text(encoding="utf-8").strip().splitlines()
+        if lines:
+            last = json.loads(lines[-1])
+            # If last action was < 30s ago, consider "actively healing"
+            last_ts = datetime.fromisoformat(last.get("timestamp", "2000-01-01"))
+            delta = (datetime.utcnow() - last_ts).total_seconds()
+            if delta < 30 and not last.get("success", True):
+                is_healing = True
+    except Exception:
+        pass
+
+if is_healing:
+    st.markdown(
+        '<div style="background:#7f1d1d; color:#fca5a5; padding:12px 20px; border-radius:8px; '
+        'text-align:center; font-weight:700; font-size:1.1rem;">'
+        '🔴 ACTIVELY HEALING — Orchestrator is fixing a failure</div>',
+        unsafe_allow_html=True,
+    )
+else:
+    st.markdown(
+        '<div style="background:#065f46; color:#6ee7b7; padding:12px 20px; border-radius:8px; '
+        'text-align:center; font-weight:700; font-size:1.1rem;">'
+        '🟢 SYSTEM HEALTHY — All services operational</div>',
+        unsafe_allow_html=True,
+    )
+
+st.markdown("---")
+
+# ── Keep the original simulation buttons below for offline demos ──────────
+st.markdown('<div class="section-header"><h3>🎭 Offline Simulation (no infra needed)</h3></div>',
             unsafe_allow_html=True)
 
 sim_col1, sim_col2 = st.columns(2)
