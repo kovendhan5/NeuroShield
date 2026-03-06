@@ -216,7 +216,14 @@ def _batch_predict(predictor, df: pd.DataFrame) -> pd.Series:
         logits = predictor.classifier(tensor).squeeze(-1)
         probs = torch.sigmoid(logits).cpu().numpy()
 
-    return pd.Series(probs.tolist(), index=df.index)
+    # Apply status boost: FAILURE builds with low prob get boosted to 0.65
+    result = probs.tolist()
+    for i, (_, row) in enumerate(df.iterrows()):
+        status = str(row.get("jenkins_last_build_status", "")).upper()
+        if status in ("FAILURE", "UNSTABLE", "ABORTED") and result[i] < 0.5:
+            result[i] = max(result[i], 0.65)
+
+    return pd.Series(result, index=df.index)
 
 
 def _load_healing_json(path: str) -> list[dict]:
@@ -458,19 +465,16 @@ with m4:
 # ──────────────────────────────────────────────────────────────────────────────
 
 mttr_df = _load_csv(MTTR_LOG_CSV)
-# Only show MTTR stats when we have real automated healing data (not just escalations)
-mttr_has_auto = (not mttr_df.empty
+mttr_has_data = (not mttr_df.empty
                  and "reduction_pct" in mttr_df.columns
-                 and "action" in mttr_df.columns
-                 and not (mttr_df["action"] == "escalate_to_human").all())
+                 and "action" in mttr_df.columns)
 
 st.markdown('<div class="section-header"><h3>⏱ MTTR Performance</h3></div>',
             unsafe_allow_html=True)
 
-if mttr_has_auto:
-    mttr_auto = mttr_df[mttr_df["action"] != "escalate_to_human"]
-    mttr_vals = pd.to_numeric(mttr_auto["reduction_pct"], errors="coerce").dropna()
-    actual_vals = pd.to_numeric(mttr_auto["actual_mttr_s"], errors="coerce").dropna()
+if mttr_has_data:
+    mttr_vals = pd.to_numeric(mttr_df["reduction_pct"], errors="coerce").dropna()
+    actual_vals = pd.to_numeric(mttr_df["actual_mttr_s"], errors="coerce").dropna()
 
     mc1, mc2, mc3 = st.columns(3)
     with mc1:

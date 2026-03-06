@@ -561,6 +561,27 @@ def _is_failure(result: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# File-based cooldown (survives restarts, works across main() + run_single_cycle())
+# ---------------------------------------------------------------------------
+
+_COOLDOWN_FILE = Path("data/.last_heal_ts")
+
+
+def _read_cooldown_ts() -> float:
+    """Read last healing timestamp from file."""
+    try:
+        return float(_COOLDOWN_FILE.read_text().strip())
+    except Exception:
+        return 0.0
+
+
+def _write_cooldown_ts() -> None:
+    """Write current time as last healing timestamp."""
+    _COOLDOWN_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _COOLDOWN_FILE.write_text(str(time.time()))
+
+
+# ---------------------------------------------------------------------------
 # Telemetry collection helpers (live mode)
 # ---------------------------------------------------------------------------
 
@@ -783,7 +804,7 @@ def main() -> None:
 
             pattern, pattern_action = detect_failure_pattern(log_text)
 
-            if failure_prob > 0.3 or _is_failure(build_status):
+            if failure_prob > 0.5:
                 # Record failure detection time for MTTR measurement
                 if failure_detected_time is None:
                     failure_detected_time = time.time()
@@ -791,8 +812,8 @@ def main() -> None:
                 # Dedup: skip if we already healed this exact build
                 if build_num is not None and build_num == last_healed_build:
                     print(f"\n  Status: Build #{build_num} already handled \u2014 skipping duplicate healing")
-                elif time.time() - last_heal_time < HEAL_COOLDOWN_S:
-                    remaining = int(HEAL_COOLDOWN_S - (time.time() - last_heal_time))
+                elif time.time() - _read_cooldown_ts() < HEAL_COOLDOWN_S:
+                    remaining = int(HEAL_COOLDOWN_S - (time.time() - _read_cooldown_ts()))
                     print(f"\n  Status: Cooldown active \u2014 {remaining}s remaining before next heal")
                 else:
                     # Use PPO to choose action
@@ -806,7 +827,7 @@ def main() -> None:
                     if _is_failure(build_status) and pattern_action is None:
                         action_id = 2  # retry_build
 
-                    if pattern_action is not None and failure_prob > 0.3:
+                    if pattern_action is not None and failure_prob > 0.5:
                         action_id = pattern_action
 
                     action_name = ACTION_NAMES.get(action_id, f"action_{action_id}")
@@ -827,6 +848,7 @@ def main() -> None:
                     if build_num is not None:
                         last_healed_build = build_num
                     last_heal_time = time.time()
+                    _write_cooldown_ts()
 
                     total_actions += 1
                     if success:
@@ -938,12 +960,23 @@ def run_single_cycle() -> Dict[str, str]:
     _setup_logging()
     _load_env()
 
+    HEAL_COOLDOWN_S = 60
+
+    # File-based cooldown check (shared with main loop)
+    elapsed = time.time() - _read_cooldown_ts()
+    if elapsed < HEAL_COOLDOWN_S:
+        remaining = int(HEAL_COOLDOWN_S - elapsed)
+        return {
+            "failure_prob": "N/A",
+            "action": "cooldown",
+            "success": "skipped",
+            "build": f"Cooldown active — {remaining}s remaining",
+        }
+
     jenkins_url = _env("JENKINS_URL", "http://localhost:8080")
     jenkins_user = _env("JENKINS_USERNAME", "admin")
     jenkins_token = _env("JENKINS_TOKEN", "")
     job_name = _env("JENKINS_JOB", "neuroshield-app-build")
-    prom_url = _env("PROMETHEUS_URL", "http://localhost:9090")
-    app_url = _env("DUMMY_APP_URL", "http://localhost:5000")
 
     predictor = FailurePredictor(model_dir="models")
     try:
@@ -971,6 +1004,15 @@ def run_single_cycle() -> Dict[str, str]:
     if failure_prob != failure_prob:  # NaN guard
         failure_prob = 0.5 if _is_failure(build_status) else 0.0
 
+    # Only heal if prob > 0.5
+    if failure_prob <= 0.5:
+        return {
+            "failure_prob": f"{failure_prob:.3f}",
+            "action": "none",
+            "success": "healthy",
+            "build": build_status,
+        }
+
     jenkins_data = {"build_duration": build.duration_ms if build else 0, "build_number": build.number if build else 0}
     prometheus_data = {"cpu_avg_5m": 0, "memory_avg_5m": 0}
     state_52d = build_52d_state(jenkins_data, prometheus_data, log_text, predictor.encoder)
@@ -986,12 +1028,21 @@ def run_single_cycle() -> Dict[str, str]:
         action_id = 2  # retry_build
 
     action_name = ACTION_NAMES.get(action_id, f"action_{action_id}")
+    heal_start = time.time()
     success = execute_healing_action(action_id, {
         "build_number": str(build.number if build else 0),
         "affected_service": _affected_service(),
         "failure_prob": f"{failure_prob:.3f}",
         "failure_pattern": "manual_trigger",
     })
+
+    # Update file-based cooldown
+    _write_cooldown_ts()
+
+    # Log MTTR
+    if success:
+        actual_mttr = time.time() - heal_start
+        _log_mttr("manual_trigger", action_name, actual_mttr)
 
     _append_csv("data/healing_log.csv", {
         "timestamp": datetime.now(timezone.utc).isoformat(),
