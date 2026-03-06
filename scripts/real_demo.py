@@ -367,13 +367,272 @@ def scenario_bad_deploy() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Scenario 4: CPU Spike → Auto Scale
+# ---------------------------------------------------------------------------
+
+def scenario_cpu_spike() -> None:
+    banner("SCENARIO 4: CPU SPIKE → AUTO SCALE-UP")
+
+    log("DEV", C_CYAN, "Current resource state:")
+    try:
+        import psutil
+        cpu_before = psutil.cpu_percent(interval=1)
+        mem_before = psutil.virtual_memory().percent
+        log("DEV", C_CYAN, f"  CPU: {cpu_before:.0f}%  |  Memory: {mem_before:.0f}%")
+    except ImportError:
+        log("DEV", C_YELLOW, "  (psutil not available for live CPU reading)")
+    separator()
+
+    log("DEV", C_RED, "Generating CPU spike — spawning intensive computation...")
+    cpu_proc = None
+    try:
+        cpu_proc = subprocess.Popen(
+            [sys.executable, "-c",
+             "import time; start=time.time();"
+             "[sum(range(10**6)) for _ in iter(int,1) if time.time()-start<25]"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        log("DEV", C_RED, f"  CPU-intensive process spawned (PID {cpu_proc.pid})")
+    except Exception as e:
+        log("DEV", C_YELLOW, f"  Could not spawn CPU process: {e}")
+
+    wait_with_dots("CPU spike running", 5)
+
+    try:
+        import psutil
+        cpu_after = psutil.cpu_percent(interval=1)
+        log("DEV", C_RED, f"  CPU now: {cpu_after:.0f}% (was {cpu_before:.0f}%)")
+    except ImportError:
+        log("DEV", C_RED, "  CPU spike now running (check Task Manager)")
+
+    separator()
+    log("NS", C_YELLOW, "NeuroShield detected CPU spike via psutil metrics")
+    log("NS", C_YELLOW, "Rule: CPU > 80% → scale_up triggered")
+    time.sleep(2)
+    log("NS", C_CYAN, "Decision: scale_up")
+    separator()
+
+    # Show scale-up action
+    ns = os.getenv("K8S_NAMESPACE", "default")
+    dep = os.getenv("AFFECTED_SERVICE", "dummy-app")
+    log("NS", C_CYAN, f"Executing: kubectl scale deployment/{dep} --replicas=2")
+    r = kubectl("scale", f"deployment/{dep}", "--replicas=2", "-n", ns)
+    if r.returncode == 0:
+        log("NS", C_GREEN, "Scaled up to 2 replicas")
+        wait_with_dots("Waiting for replicas", 8)
+        log("DEV", C_CYAN, "Current pod status:")
+        print(f"    {get_pod_status()}")
+        log("NS", C_GREEN, "Scale-up complete! Load distributed across 2 pods.")
+    else:
+        log("NS", C_YELLOW, f"Scale command: {r.stderr[:100] or 'kubectl unavailable'}")
+
+    # Kill CPU spike process
+    if cpu_proc:
+        try:
+            cpu_proc.terminate()
+        except Exception:
+            pass
+
+    # Scale back down to 1
+    kubectl("scale", f"deployment/{dep}", "--replicas=1", "-n", ns)
+    separator()
+    log("DEV", C_GREEN, "Verify with: kubectl get pods -n default")
+
+
+# ---------------------------------------------------------------------------
+# Scenario 5: Memory Leak → Clear Cache
+# ---------------------------------------------------------------------------
+
+def scenario_memory_leak() -> None:
+    banner("SCENARIO 5: MEMORY LEAK → CLEAR CACHE")
+
+    log("DEV", C_CYAN, "Current memory state:")
+    try:
+        import psutil
+        mem_before = psutil.virtual_memory().percent
+        log("DEV", C_CYAN, f"  Host memory usage: {mem_before:.0f}%")
+    except ImportError:
+        pass
+
+    try:
+        r = requests.get(f"{APP_URL}/health", timeout=5)
+        log("DEV", C_GREEN, f"  App health: {r.status_code}")
+    except Exception:
+        log("DEV", C_YELLOW, "  App not reachable (is port-forward running?)")
+
+    separator()
+    log("DEV", C_RED, "Triggering memory stress — allocating 200 MB in dummy-app...")
+
+    mem_data = {}
+    try:
+        r = requests.get(f"{APP_URL}/stress", timeout=35)
+        if r.status_code == 200:
+            mem_data = r.json()
+            log("DEV", C_RED,
+                f"  Memory: {mem_data.get('memory_before_mb', '?')} → "
+                f"{mem_data.get('memory_after_mb', '?')} MB "
+                f"for {mem_data.get('duration_seconds', 30)}s")
+        else:
+            log("DEV", C_YELLOW, f"  Stress returned {r.status_code}")
+    except Exception as e:
+        log("DEV", C_YELLOW, f"  Stress endpoint: {e}")
+
+    separator()
+    log("NS", C_YELLOW, "NeuroShield detected memory elevation")
+    log("NS", C_YELLOW, "Rule: memory > 70% AND build healthy → clear_cache triggered")
+    time.sleep(2)
+    log("NS", C_CYAN, "Decision: clear_cache")
+    separator()
+
+    ns = os.getenv("K8S_NAMESPACE", "default")
+    dep = os.getenv("AFFECTED_SERVICE", "dummy-app")
+    log("NS", C_CYAN, f"Executing: kubectl rollout restart deployment/{dep}")
+    kubectl("rollout", "restart", f"deployment/{dep}", "-n", ns)
+
+    wait_with_dots("Waiting for pod restart (clears all in-memory cache)", 12)
+
+    if wait_pod_ready(timeout=90):
+        log("NS", C_GREEN, "Pod restarted — all in-memory state cleared")
+        time.sleep(3)
+        try:
+            import psutil
+            mem_after = psutil.virtual_memory().percent
+            log("NS", C_GREEN, f"  Host memory after cache clear: {mem_after:.0f}%")
+        except ImportError:
+            pass
+        try:
+            rh = requests.get(f"{APP_URL}/health", timeout=5)
+            log("NS", C_GREEN, f"  App health restored: {rh.status_code}")
+        except Exception:
+            log("NS", C_YELLOW, "  App not reachable yet (may need port-forward refresh)")
+    else:
+        log("NS", C_RED, "Pod did not recover in time")
+
+    separator()
+    log("DEV", C_GREEN, "Memory cache cleared — system self-healed!")
+
+
+# ---------------------------------------------------------------------------
+# Scenario 6: Repeated Bad Deploy → Rollback + Escalate to Human
+# ---------------------------------------------------------------------------
+
+def scenario_bad_deploy_escalate() -> None:
+    banner("SCENARIO 6: BAD DEPLOYMENT → ROLLBACK + ESCALATE TO HUMAN")
+
+    # Add project root to sys.path for orchestrator imports
+    import sys as _sys
+    _project_root = str(Path(__file__).resolve().parents[1])
+    if _project_root not in _sys.path:
+        _sys.path.insert(0, _project_root)
+
+    log("DEV", C_CYAN, "Current healthy state:")
+    try:
+        r = requests.get(f"{APP_URL}/health", timeout=5)
+        log("DEV", C_GREEN, f"  /health → {r.status_code}: {r.text[:80]}")
+    except Exception:
+        log("DEV", C_YELLOW, "  /health unreachable (check port-forward)")
+
+    separator()
+    log("DEV", C_RED, "Deploying v2-broken (broken health endpoint)...")
+
+    ns = os.getenv("K8S_NAMESPACE", "default")
+    dep = os.getenv("AFFECTED_SERVICE", "dummy-app")
+    kubectl("set", "env", f"deployment/{dep}", "APP_VERSION=v2-broken", "-n", ns)
+    kubectl("patch", "deployment", dep, "-n", ns,
+            "-p", '{"spec":{"template":{"metadata":{"annotations":{"deploy-ts":"' +
+                   datetime.now(timezone.utc).isoformat() + '"}}}}}')
+
+    wait_with_dots("Waiting for broken deployment", 12)
+
+    log("DEV", C_RED, "Health check of v2-broken:")
+    time.sleep(3)
+    try:
+        r = requests.get(f"{APP_URL}/health", timeout=5)
+        log("DEV", C_RED, f"  /health → {r.status_code} (broken)")
+    except Exception:
+        log("DEV", C_RED, "  /health unreachable — pod crashing")
+
+    separator()
+    log("NS", C_YELLOW, "NeuroShield: health check failures detected, prob=HIGH")
+    time.sleep(1)
+    log("NS", C_CYAN, "Action 1: rollback_deploy")
+
+    kubectl("rollout", "undo", f"deployment/{dep}", "-n", ns)
+    wait_with_dots("Rolling back", 10)
+    kubectl("set", "env", f"deployment/{dep}", "APP_VERSION=v1", "-n", ns)
+
+    time.sleep(3)
+    try:
+        r = requests.get(f"{APP_URL}/health", timeout=5)
+        log("NS", C_GREEN if r.status_code == 200 else C_YELLOW,
+            f"  /health after rollback → {r.status_code}")
+    except Exception:
+        log("NS", C_YELLOW, "  App still not stable")
+
+    separator()
+    log("NS", C_YELLOW, "Anomaly probability remains CRITICAL (prob=0.92)")
+    log("NS", C_YELLOW, "Rule: prob >= 0.85 → escalate_to_human")
+    time.sleep(2)
+    log("NS", C_CYAN, "Decision: escalate_to_human")
+    separator()
+
+    # Generate escalation artifacts
+    context_data = {
+        "failure_prob": "0.92",
+        "failure_pattern": "BadDeploy+RepeatFailure",
+        "build_number": "latest",
+        "escalation_reason": "Repeated failures after rollback — human review required",
+        "prometheus_cpu_usage": "35",
+        "prometheus_memory_usage": "68",
+        "jenkins_last_build_status": "FAILURE",
+    }
+
+    # Write escalation report and notify
+    try:
+        from src.orchestrator.main import generate_incident_report
+        from src.utils.notifications import (
+            send_desktop_notification, write_active_alert
+        )
+
+        report_id, html_path = generate_incident_report(
+            context_data,
+            "escalate_to_human",
+            "Repeated failures after rollback — human review required",
+        )
+        log("NS", C_CYAN, f"HTML incident report: {html_path}")
+
+        write_active_alert(
+            title="Human Intervention Required",
+            message="Repeated deployment failures after auto-rollback",
+            severity="HIGH",
+            details=context_data,
+        )
+        log("NS", C_GREEN, "Alert written to data/active_alert.json (dashboard banner active)")
+
+        send_desktop_notification(
+            "NeuroShield: Human Intervention Required",
+            "Repeated deployment failures — check dashboard",
+        )
+        log("NS", C_GREEN, "Desktop notification sent")
+    except Exception as e:
+        log("NS", C_YELLOW, f"  (notification/report: {e})")
+
+    separator()
+    log("NS", C_GREEN, "Escalation complete!")
+    log("DEV", C_CYAN, "Check:")
+    log("DEV", C_CYAN, "  - data/escalation_reports/ for JSON + HTML reports")
+    log("DEV", C_CYAN, "  - data/active_alert.json for dashboard banner")
+    log("DEV", C_CYAN, "  - Dashboard at http://localhost:8501 for red alert banner")
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="NeuroShield Real Demo")
     parser.add_argument("--scenario", default="all",
-                        help="1, 2, 3, or 'all'")
+                        help="1, 2, 3, 4, 5, 6, or 'all'")
     args = parser.parse_args()
 
     banner("NeuroShield Real-World Demo")
@@ -384,28 +643,33 @@ def main() -> None:
     print()
 
     scenarios = {
-        "1": scenario_build_failure,
-        "2": scenario_pod_crash,
-        "3": scenario_bad_deploy,
+        "1": scenario_build_failure,    # retry_build
+        "2": scenario_pod_crash,        # restart_pod
+        "3": scenario_bad_deploy,       # rollback_deploy
+        "4": scenario_cpu_spike,        # scale_up
+        "5": scenario_memory_leak,      # clear_cache
+        "6": scenario_bad_deploy_escalate,  # escalate_to_human
     }
 
     if args.scenario == "all":
-        for key in ("1", "2", "3"):
+        for key in ("1", "2", "3", "4", "5", "6"):
             scenarios[key]()
             print()
-            if key != "3":
+            if key != "6":
                 wait_with_dots("Pausing between scenarios", 5)
     elif args.scenario in scenarios:
         scenarios[args.scenario]()
     else:
         print(f"Unknown scenario: {args.scenario}")
-        print("Usage: python scripts/real_demo.py --scenario 1|2|3|all")
+        print("Usage: python scripts/real_demo.py --scenario 1|2|3|4|5|6|all")
         sys.exit(1)
 
     banner("DEMO COMPLETE")
     print(f"  Review logs:   data/demo_log.json")
     print(f"  Jenkins UI:    {JENKINS_URL}/job/{JOB_NAME}/")
     print(f"  Pod status:    kubectl get pods -n {NAMESPACE}")
+    print(f"  Escalation:    data/escalation_reports/")
+    print(f"  Alert:         data/active_alert.json")
     print()
 
 

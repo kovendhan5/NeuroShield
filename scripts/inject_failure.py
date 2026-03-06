@@ -41,7 +41,8 @@ DEPLOYMENT = os.getenv("AFFECTED_SERVICE", "dummy-app")
 AUTH = HTTPBasicAuth(JENKINS_USER, JENKINS_PASS)
 LOG_PATH = Path("data/injection_log.json")
 
-FAILURE_TYPES = ["build_fail", "pod_crash", "memory_stress", "bad_deploy"]
+FAILURE_TYPES = ["build_fail", "pod_crash", "memory_stress", "bad_deploy",
+                 "cpu_spike", "memory_pressure"]
 
 
 def ts() -> str:
@@ -115,11 +116,46 @@ def inject_bad_deploy() -> dict:
     return {"type": "bad_deploy", "result": "ok" if r1.returncode == 0 else r1.stderr[:200]}
 
 
+def inject_cpu_spike() -> dict:
+    """Spawn a CPU-intensive Python process for 30 seconds.
+
+    Triggers scale_up action: CPU will exceed 80% threshold on most machines.
+    """
+    import sys as _sys
+    try:
+        proc = subprocess.Popen(
+            [_sys.executable, "-c",
+             "import time; start=time.time(); [sum(range(10**6)) for _ in iter(int,1) "
+             "if time.time()-start < 30]"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        print("CPU spike injected — scale_up should trigger (PID: %d)" % proc.pid)
+        return {"type": "cpu_spike", "result": f"spawned pid={proc.pid}"}
+    except Exception as e:
+        return {"type": "cpu_spike", "result": str(e)[:200]}
+
+
+def inject_memory_pressure() -> dict:
+    """Send GET /stress to dummy-app to allocate 200 MB for 30s.
+
+    Equivalent to memory_stress but explicitly named for the demo scenario.
+    Triggers clear_cache action when memory > 70% and build is healthy.
+    """
+    try:
+        r = requests.get(f"{APP_URL}/stress", timeout=10)
+        return {"type": "memory_pressure", "result": f"HTTP {r.status_code}",
+                "data": r.json() if r.status_code == 200 else r.text[:200]}
+    except Exception as e:
+        return {"type": "memory_pressure", "result": str(e)[:200]}
+
+
 INJECTORS = {
     "build_fail": inject_build_fail,
     "pod_crash": inject_pod_crash,
     "memory_stress": inject_memory_stress,
     "bad_deploy": inject_bad_deploy,
+    "cpu_spike": inject_cpu_spike,
+    "memory_pressure": inject_memory_pressure,
 }
 
 

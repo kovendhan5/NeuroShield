@@ -171,25 +171,47 @@ class PrometheusPoll:
             return None
     
     def get_cpu_usage(self) -> Optional[float]:
-        """Get average CPU usage percentage."""
-        results = self.query('rate(container_cpu_usage_seconds_total[1m])')
+        """Get node-level CPU usage percentage (works in Minikube)."""
+        # Node-level CPU: always available in Minikube
+        results = self.query(
+            '100 - (avg(rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)'
+        )
         if results:
             try:
-                return float(results[0]['value'][1]) * 100
+                val = float(results[0]['value'][1])
+                if val == val and 0 <= val <= 100:  # NaN check + range check
+                    return val
             except (KeyError, ValueError):
                 pass
+        # Fallback: psutil real system CPU
+        try:
+            import psutil
+            return psutil.cpu_percent(interval=0.1)
+        except Exception:
+            pass
         return None
-    
+
     def get_memory_usage(self) -> Optional[float]:
-        """Get average memory usage percentage."""
-        results = self.query('(container_memory_working_set_bytes / container_spec_memory_limit_bytes) * 100')
+        """Get node-level memory usage percentage (works in Minikube)."""
+        # Node-level memory: always available in Minikube
+        results = self.query(
+            '(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100'
+        )
         if results:
             try:
-                return float(results[0]['value'][1])
+                val = float(results[0]['value'][1])
+                if val == val and 0 <= val <= 100:  # NaN check + range check
+                    return val
             except (KeyError, ValueError):
                 pass
+        # Fallback: psutil real system memory
+        try:
+            import psutil
+            return psutil.virtual_memory().percent
+        except Exception:
+            pass
         return None
-    
+
     def get_pod_count(self) -> Optional[int]:
         """Get running pod count."""
         results = self.query('count(kube_pod_info)')
@@ -199,10 +221,24 @@ class PrometheusPoll:
             except (KeyError, ValueError):
                 pass
         return None
-    
+
     def get_error_rate(self) -> Optional[float]:
-        """Get HTTP error rate."""
-        results = self.query('rate(http_requests_total{status=~"5.."}[1m])')
+        """Get HTTP error rate from Flask app metrics (fallback to 0 if no data)."""
+        results = self.query(
+            'rate(flask_http_request_total{status=~"5.."}[5m]) or vector(0)'
+        )
+        if results:
+            try:
+                return float(results[0]['value'][1])
+            except (KeyError, ValueError):
+                pass
+        return None
+
+    def get_pod_restarts(self) -> Optional[float]:
+        """Get total pod restart count across default namespace."""
+        results = self.query(
+            'sum(kube_pod_container_status_restarts_total{namespace="default"}) or vector(0)'
+        )
         if results:
             try:
                 return float(results[0]['value'][1])
@@ -277,11 +313,25 @@ class TelemetryCollector:
         if self.log_capture:
             jenkins_log = self.jenkins.get_last_build_log(self.jenkins_job)
         
-        # Fetch Prometheus data
+        # Fetch Prometheus data (with psutil fallback for CPU/memory)
         cpu_usage = self.prometheus.get_cpu_usage()
         memory_usage = self.prometheus.get_memory_usage()
         pod_count = self.prometheus.get_pod_count()
         error_rate = self.prometheus.get_error_rate()
+
+        # If Prometheus CPU/memory still None or NaN, fall back to real system metrics
+        if cpu_usage is None or cpu_usage != cpu_usage:
+            try:
+                import psutil as _psutil
+                cpu_usage = _psutil.cpu_percent(interval=0.1)
+            except Exception:
+                cpu_usage = None
+        if memory_usage is None or memory_usage != memory_usage:
+            try:
+                import psutil as _psutil
+                memory_usage = _psutil.virtual_memory().percent
+            except Exception:
+                memory_usage = None
         
         telemetry = TelemetryData(
             timestamp=timestamp,
