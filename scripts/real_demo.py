@@ -36,6 +36,25 @@ DEPLOYMENT = os.getenv("AFFECTED_SERVICE", "dummy-app")
 
 AUTH = HTTPBasicAuth(JENKINS_USER, JENKINS_PASS)
 
+# Persistent session for Jenkins (cookies + crumb)
+_jenkins_session: requests.Session | None = None
+
+
+def _get_jenkins_session() -> requests.Session:
+    global _jenkins_session
+    if _jenkins_session is None:
+        _jenkins_session = requests.Session()
+        _jenkins_session.auth = (JENKINS_USER, JENKINS_PASS)
+        try:
+            r = _jenkins_session.get(f"{JENKINS_URL}/crumbIssuer/api/json", timeout=5)
+            if r.status_code == 200:
+                d = r.json()
+                _jenkins_session.headers.update({d["crumbRequestField"]: d["crumb"]})
+        except Exception:
+            pass
+    return _jenkins_session
+
+
 # ---------------------------------------------------------------------------
 # Pretty printing
 # ---------------------------------------------------------------------------
@@ -89,25 +108,23 @@ def wait_with_dots(msg: str, seconds: int) -> None:
 # ---------------------------------------------------------------------------
 
 def _jenkins_crumb_headers() -> dict:
-    try:
-        r = requests.get(f"{JENKINS_URL}/crumbIssuer/api/json", auth=AUTH, timeout=5)
-        if r.status_code == 200:
-            d = r.json()
-            return {d["crumbRequestField"]: d["crumb"]}
-    except Exception:
-        pass
+    # Kept for backward compat, but session handles crumbs now
     return {}
 
 
 def trigger_build() -> bool:
-    headers = _jenkins_crumb_headers()
-    r = requests.post(f"{JENKINS_URL}/job/{JOB_NAME}/build", auth=AUTH, headers=headers, timeout=10)
-    return r.status_code in {200, 201, 202, 301, 302}
+    s = _get_jenkins_session()
+    try:
+        r = s.post(f"{JENKINS_URL}/job/{JOB_NAME}/build", timeout=10)
+        return r.status_code in {200, 201, 202, 301, 302}
+    except Exception:
+        return False
 
 
 def get_last_build() -> dict | None:
+    s = _get_jenkins_session()
     try:
-        r = requests.get(f"{JENKINS_URL}/job/{JOB_NAME}/lastBuild/api/json", auth=AUTH, timeout=10)
+        r = s.get(f"{JENKINS_URL}/job/{JOB_NAME}/lastBuild/api/json", timeout=10)
         if r.status_code == 200:
             return r.json()
     except Exception:
