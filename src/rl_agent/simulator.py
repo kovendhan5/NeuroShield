@@ -50,31 +50,31 @@ OPTIMAL_MTTR_MINUTES: Dict[str, float] = {
     "Healthy": 0.5,
 }
 
-# --- Action space (6 discrete actions) ---
-# 0: retry_stage          – re-run the failed stage
-# 1: clean_and_rerun      – wipe caches, rebuild
-# 2: regenerate_config    – regenerate dependency/lock files
-# 3: reallocate_resources – scale pods / increase limits
-# 4: trigger_safe_rollback – roll back to last known-good
-# 5: escalate_to_human    – no automated action (defer)
+# --- Action space (6 discrete actions) — aligned with orchestrator ---
+# 0: restart_pod       – kubectl rollout restart
+# 1: scale_up          – kubectl scale replicas
+# 2: retry_build       – trigger Jenkins rebuild
+# 3: rollback_deploy   – kubectl rollout undo
+# 4: clear_cache       – restart pod to free memory
+# 5: escalate_to_human – write report, defer to human
 NUM_ACTIONS = 6
 
 OPTIMAL_ACTION: Dict[str, int] = {
-    "OOM": 3,                # reallocate_resources
-    "FlakyTest": 0,          # retry_stage
-    "DependencyConflict": 2, # regenerate_config
-    "NetworkLatency": 4,     # trigger_safe_rollback
+    "OOM": 0,                # restart_pod (kill OOM pod)
+    "FlakyTest": 2,          # retry_build (re-run the build)
+    "DependencyConflict": 3, # rollback_deploy (revert to known-good)
+    "NetworkLatency": 1,     # scale_up (more replicas to absorb)
     "Healthy": 5,            # escalate_to_human (no-op)
 }
 
 # Resource cost per action (0.0 = free, 1.0 = expensive)
 ACTION_RESOURCE_COST: Dict[int, float] = {
-    0: 0.1,   # retry_stage          – cheap
-    1: 0.4,   # clean_and_rerun      – moderate
-    2: 0.3,   # regenerate_config    – moderate
-    3: 0.6,   # reallocate_resources – expensive
-    4: 0.5,   # trigger_safe_rollback – moderate-high
-    5: 0.0,   # escalate_to_human    – free
+    0: 0.2,   # restart_pod       – cheap
+    1: 0.6,   # scale_up          – expensive (more pods)
+    2: 0.3,   # retry_build       – moderate
+    3: 0.5,   # rollback_deploy   – moderate-high
+    4: 0.3,   # clear_cache       – moderate
+    5: 0.0,   # escalate_to_human – free
 }
 
 

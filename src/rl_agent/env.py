@@ -15,14 +15,14 @@ Observation space (52D):
            lock_file_changed, transitive_dep_count, dep_conflict_count,
            registry_latency, dep_download_failures
 
-Action space (6 discrete):
-  0: retry_stage           1: clean_and_rerun
-  2: regenerate_config     3: reallocate_resources
-  4: trigger_safe_rollback 5: escalate_to_human
+Action space (6 discrete) — aligned with orchestrator:
+  0: restart_pod        1: scale_up
+  2: retry_build        3: rollback_deploy
+  4: clear_cache        5: escalate_to_human
 
 Reward:
-  R = 0.6 * mttr_reduction + 0.3 * resource_efficiency
-      - 0.1 * false_positive_penalty
+  Context-aware shaping that encourages the agent to pick the right
+  action for the observed failure type.
 """
 
 from __future__ import annotations
@@ -48,13 +48,13 @@ class NeuroShieldEnv(gym.Env):
 
     metadata = {"render_modes": []}
 
-    # --- Action labels (for logging / human readability) ---
+    # --- Action labels (aligned with orchestrator) ---
     ACTION_NAMES = {
-        0: "retry_stage",
-        1: "clean_and_rerun",
-        2: "regenerate_config",
-        3: "reallocate_resources",
-        4: "trigger_safe_rollback",
+        0: "restart_pod",
+        1: "scale_up",
+        2: "retry_build",
+        3: "rollback_deploy",
+        4: "clear_cache",
         5: "escalate_to_human",
     }
 
@@ -95,15 +95,49 @@ class NeuroShieldEnv(gym.Env):
         result = simulate_action(self.current_failure_type, int(action), self.rng)
         baseline_mttr = BASELINE_MTTR_MINUTES.get(self.current_failure_type, 12.4)
 
-        # --- Paper reward function ---
-        # R = 0.6 * mttr_reduction + 0.3 * resource_efficiency
-        #     - 0.1 * false_positive_penalty
+        # --- Context-aware reward shaping ---
         mttr_reduction = 1.0 - result.mttr / baseline_mttr
-        reward = (
+        base_reward = (
             0.6 * mttr_reduction
             + 0.3 * result.resource_efficiency
             - 0.1 * result.false_positive
         )
+
+        # Extract state features for context-aware bonuses
+        pod_restarts = float(self.state[13])  # resource_metrics[3]
+        cpu_avg = float(self.state[10])        # resource_metrics[0]
+        mem_avg = float(self.state[11])        # resource_metrics[1]
+        failed_tests = float(self.state[2])    # build_metrics[2]
+        stage_failure_rate = float(self.state[4])  # build_metrics[4]
+
+        bonus = 0.0
+        action = int(action)
+        ft = self.current_failure_type
+
+        if action == 0:  # restart_pod — good when pod_restarts high
+            if pod_restarts > 3 or ft == "OOM":
+                bonus = 0.2
+        elif action == 1:  # scale_up — good when cpu/memory high
+            if cpu_avg > 0.7 or mem_avg > 0.7 or ft == "NetworkLatency":
+                bonus = 0.2
+        elif action == 2:  # retry_build — good when build failed (flaky)
+            if failed_tests > 0 or stage_failure_rate > 0.1 or ft == "FlakyTest":
+                bonus = 0.2
+        elif action == 3:  # rollback_deploy — good when error_rate high
+            if ft == "DependencyConflict" or stage_failure_rate > 0.5:
+                bonus = 0.2
+        elif action == 4:  # clear_cache — good when memory high + build ok
+            if mem_avg > 0.7 and failed_tests == 0:
+                bonus = 0.15
+        elif action == 5:  # escalate_to_human
+            if ft == "Healthy":
+                bonus = 0.3  # correct to not act on healthy
+            else:
+                # Small positive only when very uncertain
+                prob_proxy = stage_failure_rate
+                bonus = 0.05 if prob_proxy > 0.85 else -0.1
+
+        reward = base_reward + bonus
 
         info = {
             "failure_type": self.current_failure_type,
