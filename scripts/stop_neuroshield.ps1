@@ -1,5 +1,5 @@
-# ═══════════════════════════════════════════════════════════════════════════════
-# NeuroShield — Clean Shutdown Script
+﻿# ═══════════════════════════════════════════════════════════════════════════════
+# NeuroShield -- Clean Shutdown Script
 # Usage: powershell -ExecutionPolicy Bypass -File scripts/stop_neuroshield.ps1
 # ═══════════════════════════════════════════════════════════════════════════════
 
