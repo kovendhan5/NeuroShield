@@ -14,10 +14,15 @@ import plotly.graph_objects as go
 import requests
 import streamlit as st
 
+import numpy as np
+import torch
+
 # Ensure project root is on sys.path
 _PROJECT_ROOT = str(Path(__file__).resolve().parents[2])
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
+
+from src.prediction.predictor import FailurePredictor, telemetry_to_vector
 
 # ──────────────────────────────────────────────────────────────────────────────
 # FIX 7 — Page config with title and favicon
@@ -169,6 +174,51 @@ def _status_badge(name: str, is_up: bool) -> str:
     return f'<span class="{cls}">● {name}: {label}</span>'
 
 
+@st.cache_resource
+def _get_predictor():
+    """Load the real FailurePredictor once (DistilBERT + PCA + classifier)."""
+    return FailurePredictor(model_dir=Path(_PROJECT_ROOT) / "models")
+
+
+def _batch_predict(predictor, df: pd.DataFrame) -> pd.Series:
+    """Compute real failure probability for every row using DistilBERT + classifier."""
+    if df.empty:
+        return pd.Series(dtype=float)
+
+    # Collect log texts
+    logs = []
+    for _, row in df.iterrows():
+        txt = str(row.get("jenkins_last_build_log", ""))
+        if not txt or txt == "nan":
+            txt = f"Build status {row.get('jenkins_last_build_status', 'UNKNOWN')}"
+        logs.append(txt)
+
+    # Batch encode logs → PCA-reduced embeddings (N, 16)
+    embeddings = predictor.encoder.encode_logs(logs)
+
+    # Build telemetry vectors (N, 8)
+    tel_vecs = []
+    for _, row in df.iterrows():
+        tel = {c: row.get(c) for c in [
+            "jenkins_last_build_status", "jenkins_last_build_duration",
+            "jenkins_queue_length", "prometheus_cpu_usage",
+            "prometheus_memory_usage", "prometheus_pod_count",
+            "prometheus_error_rate",
+        ]}
+        tel_vecs.append(telemetry_to_vector(tel))
+
+    states = np.concatenate(
+        [embeddings.astype(np.float32), np.stack(tel_vecs)], axis=1
+    )  # (N, 24)
+
+    tensor = torch.tensor(states, dtype=torch.float32, device=predictor.device)
+    with torch.no_grad():
+        logits = predictor.classifier(tensor).squeeze(-1)
+        probs = torch.sigmoid(logits).cpu().numpy()
+
+    return pd.Series(probs.tolist(), index=df.index)
+
+
 def _load_healing_json(path: str) -> list[dict]:
     """Load healing_log.json (JSONL: one JSON object per line)."""
     p = Path(path)
@@ -314,11 +364,18 @@ healing_json_records = _load_healing_json("data/healing_log.json")
 
 total_healing_actions = max(len(healing_df), len(healing_json_records)) + len(action_df)
 
+# ── Compute REAL failure_prob using DistilBERT predictor (last 50 rows) ──
+predictor = _get_predictor()
+df_recent = telemetry_df.tail(50).copy() if not telemetry_df.empty else pd.DataFrame()
+if not df_recent.empty:
+    df_recent["failure_prob"] = _batch_predict(predictor, df_recent)
+
 # Debug sidebar info
 if not telemetry_df.empty:
     st.sidebar.markdown("---")
-    st.sidebar.write("CSV columns:", list(telemetry_df.columns))
     st.sidebar.write("CSV rows:", len(telemetry_df))
+    if not df_recent.empty and "failure_prob" in df_recent.columns:
+        st.sidebar.write("Last prob:", f"{df_recent['failure_prob'].iloc[-1]:.4f}")
 
 # ──────────────────────────────────────────────────────────────────────────────
 # FIX 8 — METRICS FROM REAL DATA
@@ -331,28 +388,17 @@ st.markdown('<div class="section-header"><h3>📊 Key Performance Metrics</h3></
 total_records = len(telemetry_df) if not telemetry_df.empty else 0
 
 last_failure_prob = "N/A"
-if not telemetry_df.empty:
-    if "failure_prob" in telemetry_df.columns:
-        valid = pd.to_numeric(telemetry_df["failure_prob"], errors="coerce").dropna()
-        if len(valid) > 0:
-            last_failure_prob = f"{valid.iloc[-1]:.3f}"
-    else:
-        # Compute proxy from build status + prometheus metrics
-        cpu = pd.to_numeric(telemetry_df.get("prometheus_cpu_usage", pd.Series(dtype=float)),
-                            errors="coerce").fillna(0)
-        mem = pd.to_numeric(telemetry_df.get("prometheus_memory_usage", pd.Series(dtype=float)),
-                            errors="coerce").fillna(0)
-        err = pd.to_numeric(telemetry_df.get("prometheus_error_rate", pd.Series(dtype=float)),
-                            errors="coerce").fillna(0)
-        build_fail = telemetry_df.get("jenkins_last_build_status", pd.Series(dtype=str)).apply(
-            lambda x: 0.35 if str(x).upper() in ("FAILURE", "UNSTABLE", "ABORTED") else 0.0
-        )
-        proxy = (cpu / 100 * 0.2 + mem / 100 * 0.2 + err * 0.2 + build_fail).clip(0, 1)
-        last_val = proxy.iloc[-1] if len(proxy) > 0 else 0
-        last_failure_prob = f"{last_val:.3f}"
+if not df_recent.empty and "failure_prob" in df_recent.columns:
+    last_failure_prob = f"{df_recent['failure_prob'].iloc[-1]:.3f}"
 
 most_common_action = "N/A"
-if not healing_df.empty and "action_name" in healing_df.columns:
+# Prefer healing_log.json data (JSONL has most complete records)
+if healing_json_records:
+    from collections import Counter as _Counter
+    _action_counts = _Counter(r.get("action_name", "") for r in healing_json_records)
+    if _action_counts:
+        most_common_action = _action_counts.most_common(1)[0][0]
+elif not healing_df.empty and "action_name" in healing_df.columns:
     mode = healing_df["action_name"].mode()
     if len(mode) > 0:
         most_common_action = str(mode.iloc[0])
@@ -360,8 +406,6 @@ elif not action_df.empty and "action" in action_df.columns:
     mode = action_df["action"].mode()
     if len(mode) > 0:
         most_common_action = str(mode.iloc[0])
-else:
-    most_common_action = "retry_build"
 
 uptime_str = "N/A"
 if not telemetry_df.empty and "timestamp" in telemetry_df.columns:
@@ -457,34 +501,22 @@ with chart_col:
     st.markdown('<div class="section-header"><h3>📈 Failure Probability — Last 50 Readings</h3></div>',
                 unsafe_allow_html=True)
 
-    if not telemetry_df.empty and "timestamp" in telemetry_df.columns:
-        recent = telemetry_df.tail(50).copy()
-
-        if "failure_prob" in recent.columns:
-            prob_col = pd.to_numeric(recent["failure_prob"], errors="coerce").fillna(0)
-        else:
-            cpu = pd.to_numeric(recent.get("prometheus_cpu_usage", 0), errors="coerce").fillna(0) / 100
-            mem = pd.to_numeric(recent.get("prometheus_memory_usage", 0), errors="coerce").fillna(0) / 100
-            err = pd.to_numeric(recent.get("prometheus_error_rate", 0), errors="coerce").fillna(0)
-            status_fail = recent.get("jenkins_last_build_status", "").apply(
-                lambda x: 0.3 if str(x).upper() in ("FAILURE", "UNSTABLE", "ABORTED") else 0.0
-            )
-            prob_col = (cpu * 0.25 + mem * 0.25 + err * 0.2 + status_fail).clip(0, 1)
-
-        x_axis = recent["timestamp"] if "timestamp" in recent.columns else list(range(len(recent)))
+    if not df_recent.empty and "failure_prob" in df_recent.columns:
+        prob_col = df_recent["failure_prob"]
+        x_axis = df_recent["timestamp"] if "timestamp" in df_recent.columns else list(range(len(df_recent)))
 
         fig_line = go.Figure()
         fig_line.add_trace(go.Scatter(
             x=list(x_axis), y=list(prob_col),
             mode="lines+markers",
             name="Failure Probability",
-            line=dict(color="#3b82f6", width=2),
+            line=dict(color="#ef4444", width=2),
             marker=dict(size=4),
             fill="tozeroy",
-            fillcolor="rgba(59,130,246,0.1)",
+            fillcolor="rgba(239,68,68,0.1)",
         ))
-        fig_line.add_hline(y=0.5, line_dash="dash", line_color="#ef4444",
-                           annotation_text="Threshold (0.5)")
+        fig_line.add_hline(y=0.5, line_dash="dash", line_color="#f59e0b",
+                           annotation_text="Healing Threshold (0.5)")
         fig_line.update_layout(
             yaxis=dict(title="Probability", range=[0, 1]),
             xaxis=dict(title="Time", showticklabels=False),
@@ -504,9 +536,16 @@ with pie_col:
                 unsafe_allow_html=True)
 
     action_labels = list(ACTION_NAMES.values())
-    action_values = ACTION_DISTRIBUTION
+    action_values = ACTION_DISTRIBUTION  # fallback
 
-    if not healing_df.empty and "action_id" in healing_df.columns:
+    # Prefer real data from healing_log.json
+    if healing_json_records:
+        from collections import Counter as _Ctr
+        _ac = _Ctr(r.get("action_name", "") for r in healing_json_records)
+        action_values = [int(_ac.get(ACTION_NAMES[i], 0)) for i in range(6)]
+        if sum(action_values) == 0:
+            action_values = ACTION_DISTRIBUTION
+    elif not healing_df.empty and "action_id" in healing_df.columns:
         counts = healing_df["action_id"].astype(int).value_counts()
         action_values = [int(counts.get(i, 0)) for i in range(6)]
         if sum(action_values) == 0:
@@ -568,25 +607,32 @@ def _jenkins_crumb(session):
 
 with ctrl_col1:
     if st.button("🔨 Trigger Build Failure", use_container_width=True):
-        try:
-            s = requests.Session()
-            s.auth = _jenkins_auth()
-            _jenkins_crumb(s)
-            r = s.post(f"{JENKINS_URL}/job/{JENKINS_JOB_NAME}/build", timeout=10)
-            if r.status_code in {200, 201, 202, 301, 302}:
-                st.success(f"Build triggered on '{JENKINS_JOB_NAME}' — check Jenkins UI")
-            else:
-                st.error(f"Jenkins returned {r.status_code}")
-        except Exception as e:
-            st.error(f"Jenkins unreachable: {e}")
+        with st.spinner("Triggering Jenkins build..."):
+            try:
+                s = requests.Session()
+                s.auth = _jenkins_auth()
+                _jenkins_crumb(s)
+                r = s.post(f"{JENKINS_URL}/job/{JENKINS_JOB_NAME}/build", timeout=10)
+                if r.status_code in {200, 201, 202, 301, 302}:
+                    st.success("✅ Build triggered! Watch Jenkins: "
+                              f"{JENKINS_URL}/job/{JENKINS_JOB_NAME}/")
+                    st.info("NeuroShield will detect the build result in ~15 seconds "
+                            "and auto-heal if it fails.")
+                else:
+                    st.error(f"Jenkins returned {r.status_code}")
+            except Exception as e:
+                st.error(f"Jenkins unreachable: {e}")
 
 with ctrl_col2:
     if st.button("💀 Crash the Pod", use_container_width=True):
-        try:
-            requests.post(f"{DUMMY_APP_URL}/crash", timeout=5)
-            st.warning("Crash signal sent — pod will restart")
-        except Exception:
-            st.warning("Crash sent (connection dropped = pod died)")
+        with st.spinner("Crashing pod..."):
+            try:
+                requests.post(f"{DUMMY_APP_URL}/crash", timeout=5)
+            except Exception:
+                pass  # expected — pod dies, connection drops
+            st.success("✅ Pod crash triggered!")
+            st.info("NeuroShield will detect the pod failure and restart it in ~15 seconds.")
+            st.code("kubectl get pods --watch", language="bash")
 
 with ctrl_col3:
     if st.button("🔥 Stress Memory", use_container_width=True):
@@ -845,48 +891,39 @@ st.markdown("---")
 st.markdown('<div class="section-header"><h3>📜 Real-Time Telemetry Log</h3></div>',
             unsafe_allow_html=True)
 
-if not telemetry_df.empty and "timestamp" in telemetry_df.columns:
-    log_rows = telemetry_df.tail(20).iloc[::-1]
+if not df_recent.empty and "failure_prob" in df_recent.columns:
+    # Show last 20 readings with REAL predictor probabilities
+    log_rows = df_recent.tail(20).iloc[::-1]
     log_lines: list[str] = []
     for _, row in log_rows.iterrows():
         ts_val = str(row.get("timestamp", ""))
-        # Extract time portion
         try:
             ts_short = pd.to_datetime(ts_val).strftime("%H:%M:%S")
         except Exception:
             ts_short = ts_val[:8] if len(ts_val) >= 8 else ts_val
 
-        cpu = row.get("prometheus_cpu_usage", "")
-        mem = row.get("prometheus_memory_usage", "")
-        err = row.get("prometheus_error_rate", "")
-        status = row.get("jenkins_last_build_status", "")
-
-        # Build failure prob proxy
-        prob = row.get("failure_prob", None)
-        if prob is None or pd.isna(prob):
-            try:
-                c = float(cpu) / 100 if cpu and not pd.isna(cpu) else 0
-                m = float(mem) / 100 if mem and not pd.isna(mem) else 0
-                e = float(err) if err and not pd.isna(err) else 0
-                s = 0.35 if str(status).upper() in ("FAILURE", "UNSTABLE", "ABORTED") else 0.0
-                prob = round(c * 0.2 + m * 0.2 + e * 0.2 + s, 3)
-            except (ValueError, TypeError):
-                prob = 0.0
+        status = str(row.get("jenkins_last_build_status", ""))
+        prob = float(row.get("failure_prob", 0.0))
 
         action = "none"
         result = "System healthy"
-        if float(prob) > 0.5:
+        if prob > 0.5:
             action = "retry_build"
-            result = "TRIGGERED"
-        elif float(prob) > 0.3:
+            result = "HEALING"
+        elif prob > 0.3:
             action = "monitoring"
             result = "Watching"
+        elif status.upper() == "FAILURE":
+            action = "retry_build"
+            result = "Build failed"
 
-        color = "#10b981" if float(prob) < 0.3 else "#f59e0b" if float(prob) < 0.5 else "#ef4444"
+        color = "#10b981" if prob < 0.3 else "#f59e0b" if prob < 0.5 else "#ef4444"
+        status_icon = "❌" if status.upper() == "FAILURE" else "✅" if status.upper() == "SUCCESS" else "❓"
         log_lines.append(
             f'<div class="log-entry">'
             f'<span style="color:#6b7280;">[{ts_short}]</span> '
-            f'Failure prob: <span style="color:{color}; font-weight:600;">{prob}</span> '
+            f'{status_icon} {status} | '
+            f'Failure prob: <span style="color:{color}; font-weight:600;">{prob:.3f}</span> '
             f'→ Action: <b>{action}</b> → {result}'
             f'</div>'
         )

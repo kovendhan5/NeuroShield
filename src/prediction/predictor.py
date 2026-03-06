@@ -16,13 +16,16 @@ _DEFAULT_PREDICTOR: FailurePredictor | None = None
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
-    """Convert values to float safely."""
+    """Convert values to float safely, treating NaN as *default*."""
     if value is None:
         return default
     if isinstance(value, str) and value.strip() == "":
         return default
     try:
-        return float(value)
+        result = float(value)
+        if result != result:  # NaN check (works for float & numpy NaN)
+            return default
+        return result
     except (TypeError, ValueError):
         return default
 
