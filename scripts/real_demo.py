@@ -17,6 +17,10 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Ensure UTF-8 output on Windows terminals (cp1252 can't print → etc.)
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 import requests
 from requests.auth import HTTPBasicAuth
 from dotenv import load_dotenv
