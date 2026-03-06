@@ -48,6 +48,30 @@ ACTION_NAMES: Dict[int, str] = {
     5: "escalate_to_human",
 }
 
+# MTTR baselines (seconds) — manual remediation without NeuroShield
+MTTR_BASELINES: Dict[str, float] = {
+    "restart_pod": 90.0,
+    "scale_up": 60.0,
+    "retry_build": 70.0,
+    "rollback_deploy": 120.0,
+    "clear_cache": 45.0,
+    "escalate_to_human": 300.0,
+}
+
+
+def _log_mttr(failure_type: str, action_name: str, actual_mttr: float) -> None:
+    """Append MTTR measurement to data/mttr_log.csv."""
+    baseline = MTTR_BASELINES.get(action_name, 120.0)
+    reduction_pct = max(0.0, (baseline - actual_mttr) / baseline * 100)
+    _append_csv("data/mttr_log.csv", {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "failure_type": failure_type,
+        "action": action_name,
+        "actual_mttr_s": f"{actual_mttr:.1f}",
+        "baseline_mttr_s": f"{baseline:.1f}",
+        "reduction_pct": f"{reduction_pct:.1f}",
+    })
+
 
 def _namespace() -> str:
     return os.getenv("K8S_NAMESPACE", "default")
@@ -661,6 +685,8 @@ def main() -> None:
     last_healed_build: Optional[int] = None  # dedup: skip if already healed this build
     last_heal_time: float = 0.0  # cooldown: timestamp of last healing action
     HEAL_COOLDOWN_S = 60  # seconds to wait between healing actions
+    failure_detected_time: Optional[float] = None  # MTTR: when current failure was first detected
+    mttr_measurements: list = []  # MTTR: list of reduction percentages for summary
 
     print(f"\n  Entering monitoring loop (Ctrl+C to stop)...")
 
@@ -755,6 +781,10 @@ def main() -> None:
             pattern, pattern_action = detect_failure_pattern(log_text)
 
             if failure_prob > 0.5 or _is_failure(build_status):
+                # Record failure detection time for MTTR measurement
+                if failure_detected_time is None:
+                    failure_detected_time = time.time()
+
                 # Dedup: skip if we already healed this exact build
                 if build_num is not None and build_num == last_healed_build:
                     print(f"\n  Status: Build #{build_num} already handled \u2014 skipping duplicate healing")
@@ -795,6 +825,16 @@ def main() -> None:
                     if success:
                         successful_actions += 1
                         print(f"    Result:   SUCCESS")
+
+                        # MTTR measurement
+                        if failure_detected_time is not None:
+                            actual_mttr = time.time() - failure_detected_time
+                            baseline = MTTR_BASELINES.get(action_name, 120.0)
+                            reduction = max(0.0, (baseline - actual_mttr) / baseline * 100)
+                            mttr_measurements.append(reduction)
+                            _log_mttr(pattern or "unknown", action_name, actual_mttr)
+                            print(f"    MTTR:     {actual_mttr:.1f}s (baseline {baseline:.0f}s, {reduction:.1f}% reduction)")
+                            failure_detected_time = None
                     else:
                         print(f"    Result:   FAILED")
 
@@ -815,9 +855,13 @@ def main() -> None:
                     })
             else:
                 print(f"\n  Status: System healthy â€” no intervention needed")
+                failure_detected_time = None  # reset MTTR timer when healthy
 
             # --- Summary ---
             print(f"\n  Stats: {total_actions} actions taken, {successful_actions} successful")
+            mttr_avg = sum(mttr_measurements) / len(mttr_measurements) if mttr_measurements else 0
+            if mttr_measurements:
+                print(f"  Avg MTTR Reduction: {mttr_avg:.1f}% ({len(mttr_measurements)} incidents)")
             if build:
                 last_build_number = build.number
 
