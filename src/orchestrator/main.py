@@ -1,4 +1,4 @@
-"""NeuroShield Orchestrator - Real-time CI/CD Monitoring."""
+﻿"""NeuroShield Orchestrator - Real-time CI/CD Monitoring."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Dict, Optional, Tuple, TypeVar
 
@@ -254,7 +254,7 @@ def _append_csv(path: str, row: Dict[str, str]) -> None:
 def _log_action_history(action_id: int, success: bool, duration_ms: float) -> None:
     """Record every healing action to data/action_history.csv."""
     _append_csv("data/action_history.csv", {
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "action_id": str(action_id),
         "action_name": ACTION_NAMES.get(action_id, "unknown"),
         "success": str(success),
@@ -266,12 +266,12 @@ def execute_healing_action(action_id: int, context: Dict[str, str]) -> bool:
     """Execute one of 6 healing actions with REAL infrastructure calls.
 
     Actions:
-        0 — restart_pod:       kubectl rollout restart deployment/dummy-app
-        1 — scale_up:          kubectl scale deployment --replicas=3
-        2 — retry_build:       POST Jenkins API to trigger new build
-        3 — rollback_deploy:   kubectl rollout undo deployment/dummy-app
-        4 — clear_cache:       Call dummy-app /stress to refresh, or restart pod
-        5 — escalate_to_human: Write detailed report to data/escalation_reports/
+        0 â€” restart_pod:       kubectl rollout restart deployment/dummy-app
+        1 â€” scale_up:          kubectl scale deployment --replicas=3
+        2 â€” retry_build:       POST Jenkins API to trigger new build
+        3 â€” rollback_deploy:   kubectl rollout undo deployment/dummy-app
+        4 â€” clear_cache:       Call dummy-app /stress to refresh, or restart pod
+        5 â€” escalate_to_human: Write detailed report to data/escalation_reports/
     """
     start_ms = time.time() * 1000.0
     success = False
@@ -281,7 +281,7 @@ def execute_healing_action(action_id: int, context: Dict[str, str]) -> bool:
         service = context.get("affected_service", _affected_service())
 
         if action_id == 0:  # restart_pod
-            logging.info("[ACTION] restart_pod — %s in %s", service, namespace)
+            logging.info("[ACTION] restart_pod â€” %s in %s", service, namespace)
             cmd = ["kubectl", "rollout", "restart", f"deployment/{service}", "-n", namespace]
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
             if result.returncode == 0:
@@ -297,7 +297,7 @@ def execute_healing_action(action_id: int, context: Dict[str, str]) -> bool:
 
         elif action_id == 1:  # scale_up
             replicas = _scale_replicas()
-            logging.info("[ACTION] scale_up — %s to %d replicas", service, replicas)
+            logging.info("[ACTION] scale_up â€” %s to %d replicas", service, replicas)
             cmd = ["kubectl", "scale", f"deployment/{service}", f"--replicas={replicas}", "-n", namespace]
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
             if result.returncode == 0:
@@ -321,7 +321,7 @@ def execute_healing_action(action_id: int, context: Dict[str, str]) -> bool:
                 detail = result.stderr.strip()[:200]
 
         elif action_id == 2:  # retry_build
-            logging.info("[ACTION] retry_build — triggering Jenkins build")
+            logging.info("[ACTION] retry_build â€” triggering Jenkins build")
             jenkins_url = _env("JENKINS_URL", "http://localhost:8080")
             job_name = _env("JENKINS_JOB", "neuroshield-app-build")
             username = _env("JENKINS_USERNAME", "admin")
@@ -353,7 +353,7 @@ def execute_healing_action(action_id: int, context: Dict[str, str]) -> bool:
                     new_build = get_latest_build_info(jenkins_url, job_name, username, token)
                     if new_build and new_build.number > pre_num and new_build.result not in (None, "RUNNING"):
                         success = new_build.result == "SUCCESS"
-                        detail = f"build #{new_build.number} → {new_build.result}"
+                        detail = f"build #{new_build.number} â†’ {new_build.result}"
                         break
                 if not success and not detail:
                     detail = "timeout waiting for build result"
@@ -361,7 +361,7 @@ def execute_healing_action(action_id: int, context: Dict[str, str]) -> bool:
                 detail = f"Jenkins trigger HTTP {r.status_code}"
 
         elif action_id == 3:  # rollback_deploy
-            logging.info("[ACTION] rollback_deploy — %s in %s", service, namespace)
+            logging.info("[ACTION] rollback_deploy â€” %s in %s", service, namespace)
             undo = subprocess.run(
                 ["kubectl", "rollout", "undo", f"deployment/{service}", "-n", namespace],
                 capture_output=True, text=True, timeout=30,
@@ -388,7 +388,7 @@ def execute_healing_action(action_id: int, context: Dict[str, str]) -> bool:
                 detail = undo.stderr.strip()[:200]
 
         elif action_id == 4:  # clear_cache
-            logging.info("[ACTION] clear_cache — restarting %s to free memory", service)
+            logging.info("[ACTION] clear_cache â€” restarting %s to free memory", service)
             # Restart pod to clear all in-memory state
             cmd = ["kubectl", "rollout", "restart", f"deployment/{service}", "-n", namespace]
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
@@ -403,14 +403,14 @@ def execute_healing_action(action_id: int, context: Dict[str, str]) -> bool:
                 detail = result.stderr.strip()[:200]
 
         elif action_id == 5:  # escalate_to_human
-            logging.info("[ACTION] escalate_to_human — writing escalation report")
+            logging.info("[ACTION] escalate_to_human â€” writing escalation report")
             report_dir = Path("data/escalation_reports")
             report_dir.mkdir(parents=True, exist_ok=True)
-            ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+            ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
             report_path = report_dir / f"escalation_{ts}.json"
 
             report = {
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "failure_type": context.get("failure_pattern", "unknown"),
                 "failure_probability": context.get("failure_prob", "?"),
                 "build_number": context.get("build_number", "?"),
@@ -457,7 +457,7 @@ def execute_healing_action(action_id: int, context: Dict[str, str]) -> bool:
     _log_healing_json(action_id, success, duration_ms, detail, context)
 
     if not success:
-        logging.warning("[ACTION] %s FAILED (%s) — will retry once", ACTION_NAMES.get(action_id, "?"), detail)
+        logging.warning("[ACTION] %s FAILED (%s) â€” will retry once", ACTION_NAMES.get(action_id, "?"), detail)
 
     return success
 
@@ -468,7 +468,7 @@ def _log_healing_json(action_id: int, success: bool, duration_ms: float,
     p = Path("data/healing_log.json")
     p.parent.mkdir(parents=True, exist_ok=True)
     entry = {
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "action_id": action_id,
         "action_name": ACTION_NAMES.get(action_id, "unknown"),
         "success": success,
@@ -549,18 +549,18 @@ def _save_telemetry_row(row: Dict[str, str]) -> None:
 
 def _print_banner() -> None:
     print("\n" + "=" * 65)
-    print("  NeuroShield AIOps Orchestrator — Live Mode")
+    print("  NeuroShield AIOps Orchestrator â€” Live Mode")
     print("=" * 65)
 
 
 def _print_cycle_header(cycle: int) -> None:
-    print(f"\n{'─' * 55}")
-    print(f"  CYCLE #{cycle}  |  {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}")
-    print(f"{'─' * 55}")
+    print(f"\n{'â”€' * 55}")
+    print(f"  CYCLE #{cycle}  |  {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
+    print(f"{'â”€' * 55}")
 
 
 def _print_status(label: str, ok: bool, extra: str = "") -> None:
-    icon = "✓" if ok else "✗"
+    icon = "âœ“" if ok else "âœ—"
     tag = "ONLINE" if ok else "OFFLINE"
     print(f"  [{icon}] {label:20s} {tag:8s}  {extra}")
 
@@ -596,16 +596,17 @@ def main() -> None:
 
     try:
         policy = PPO.load("models/ppo_policy.zip")
-        print("    [OK] PPO RL policy loaded (52D state → 6 actions)")
+        print("    [OK] PPO RL policy loaded (52D state â†’ 6 actions)")
     except Exception as exc:
         policy = None
-        print(f"    [!!] PPO policy not found — falling back to default action ({exc})")
+        print(f"    [!!] PPO policy not found â€” falling back to default action ({exc})")
 
     # Tracking
     cycle_count = 0
     total_actions = 0
     successful_actions = 0
     last_build_number: Optional[int] = None
+    last_healed_build: Optional[int] = None  # dedup: skip if already healed this build
 
     print(f"\n  Entering monitoring loop (Ctrl+C to stop)...")
 
@@ -650,7 +651,7 @@ def main() -> None:
 
             # Save telemetry row
             _save_telemetry_row({
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "jenkins_last_build_status": build_status,
                 "jenkins_last_build_duration": str(build_duration),
                 "jenkins_queue_length": "0",
@@ -678,7 +679,7 @@ def main() -> None:
 
             failure_prob = predictor.predict(log_text, telemetry_dict)
 
-            prob_bar = "█" * int(failure_prob * 20) + "░" * (20 - int(failure_prob * 20))
+            prob_bar = "â–ˆ" * int(failure_prob * 20) + "â–‘" * (20 - int(failure_prob * 20))
             prob_label = "LOW" if failure_prob < 0.3 else "MEDIUM" if failure_prob < 0.6 else "HIGH" if failure_prob < 0.8 else "CRITICAL"
             print(f"\n  Prediction:")
             print(f"    Failure Prob: [{prob_bar}] {failure_prob:.3f} ({prob_label})")
@@ -700,54 +701,62 @@ def main() -> None:
             pattern, pattern_action = detect_failure_pattern(log_text)
 
             if failure_prob > 0.5 or _is_failure(build_status):
-                # Use PPO to choose action
-                if policy is not None:
-                    action, _ = policy.predict(state_52d, deterministic=True)
-                    action_id = int(action)
+                # Dedup: skip if we already healed this exact build
+                if build_num is not None and build_num == last_healed_build:
+                    print(f"\n  Status: Build #{build_num} already handled â€” skipping duplicate healing")
                 else:
-                    action_id = 0  # default to restart_pod
+                    # Use PPO to choose action
+                    if policy is not None:
+                        action, _ = policy.predict(state_52d, deterministic=True)
+                        action_id = int(action)
+                    else:
+                        action_id = 0  # default to restart_pod
 
-                if pattern_action is not None and failure_prob > 0.7:
-                    action_id = pattern_action
+                    if pattern_action is not None and failure_prob > 0.7:
+                        action_id = pattern_action
 
-                action_name = ACTION_NAMES.get(action_id, f"action_{action_id}")
-                print(f"\n  RL Agent Decision:")
-                print(f"    Pattern:  {pattern}")
-                print(f"    Action:   [{action_id}] {action_name}")
-                print(f"    Reason:   failure_prob={failure_prob:.3f}, build={build_status}")
+                    action_name = ACTION_NAMES.get(action_id, f"action_{action_id}")
+                    print(f"\n  RL Agent Decision:")
+                    print(f"    Pattern:  {pattern}")
+                    print(f"    Action:   [{action_id}] {action_name}")
+                    print(f"    Reason:   failure_prob={failure_prob:.3f}, build={build_status}")
 
-                # Execute healing action
-                success = execute_healing_action(action_id, {
-                    "build_number": str(build_num),
-                    "affected_service": _affected_service(),
-                    "failure_prob": f"{failure_prob:.3f}",
-                    "failure_pattern": pattern or "none",
-                })
+                    # Execute healing action
+                    success = execute_healing_action(action_id, {
+                        "build_number": str(build_num),
+                        "affected_service": _affected_service(),
+                        "failure_prob": f"{failure_prob:.3f}",
+                        "failure_pattern": pattern or "none",
+                    })
 
-                total_actions += 1
-                if success:
-                    successful_actions += 1
-                    print(f"    Result:   SUCCESS")
-                else:
-                    print(f"    Result:   FAILED")
+                    # Mark as handled after execution
+                    if build_num is not None:
+                        last_healed_build = build_num
 
-                # Log healing decision
-                _append_csv("data/healing_log.csv", {
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "cycle": str(cycle_count),
-                    "build_number": str(build_num),
-                    "build_status": build_status,
-                    "failure_prob": f"{failure_prob:.3f}",
-                    "pattern": pattern,
-                    "action_id": str(action_id),
-                    "action_name": action_name,
-                    "success": str(success),
-                    "cpu": f"{prom_metrics['cpu_usage']:.1f}",
-                    "memory": f"{prom_metrics['memory_usage']:.1f}",
-                    "app_health": f"{app_health['health_pct']:.0f}",
-                })
+                    total_actions += 1
+                    if success:
+                        successful_actions += 1
+                        print(f"    Result:   SUCCESS")
+                    else:
+                        print(f"    Result:   FAILED")
+
+                    # Log healing decision
+                    _append_csv("data/healing_log.csv", {
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "cycle": str(cycle_count),
+                        "build_number": str(build_num),
+                        "build_status": build_status,
+                        "failure_prob": f"{failure_prob:.3f}",
+                        "pattern": pattern,
+                        "action_id": str(action_id),
+                        "action_name": action_name,
+                        "success": str(success),
+                        "cpu": f"{prom_metrics['cpu_usage']:.1f}",
+                        "memory": f"{prom_metrics['memory_usage']:.1f}",
+                        "app_health": f"{app_health['health_pct']:.0f}",
+                    })
             else:
-                print(f"\n  Status: System healthy — no intervention needed")
+                print(f"\n  Status: System healthy â€” no intervention needed")
 
             # --- Summary ---
             print(f"\n  Stats: {total_actions} actions taken, {successful_actions} successful")
@@ -767,7 +776,7 @@ def main() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Simulate mode – one-shot simulated decision (no Jenkins / K8s needed)
+# Simulate mode â€“ one-shot simulated decision (no Jenkins / K8s needed)
 # ---------------------------------------------------------------------------
 
 def run_once(model_dir: str = "models") -> None:
@@ -870,7 +879,7 @@ def run_single_cycle() -> Dict[str, str]:
     })
 
     _append_csv("data/healing_log.csv", {
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "cycle": "manual",
         "build_number": str(build.number if build else 0),
         "build_status": build_status,
