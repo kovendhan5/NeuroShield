@@ -136,7 +136,7 @@ class TestLogActionHistory:
         _log_action_history(action_id=0, success=True, duration_ms=123.0)
         rows = list(csv.DictReader(open(csv_file, encoding="utf-8")))
         assert len(rows) == 1
-        assert rows[0]["action_name"] == "retry_stage"
+        assert rows[0]["action_name"] == "restart_pod"
         assert rows[0]["success"] == "True"
 
 
