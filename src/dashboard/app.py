@@ -149,7 +149,7 @@ def _load_csv(path: str) -> pd.DataFrame:
     if not Path(path).exists():
         return pd.DataFrame()
     try:
-        df = pd.read_csv(path)
+        df = pd.read_csv(path, encoding="latin-1", on_bad_lines="skip")
         return df if not df.empty else pd.DataFrame()
     except Exception:
         return pd.DataFrame()
@@ -167,6 +167,24 @@ def _status_badge(name: str, is_up: bool) -> str:
     cls = "badge-online" if is_up else "badge-offline"
     label = "ONLINE" if is_up else "OFFLINE"
     return f'<span class="{cls}">● {name}: {label}</span>'
+
+
+def _load_healing_json(path: str) -> list[dict]:
+    """Load healing_log.json (JSONL: one JSON object per line)."""
+    p = Path(path)
+    if not p.exists():
+        return []
+    records: list[dict] = []
+    try:
+        for line in p.read_text(encoding="utf-8").strip().splitlines():
+            if line.strip():
+                try:
+                    records.append(json.loads(line))
+                except (json.JSONDecodeError, ValueError):
+                    pass
+    except Exception:
+        pass
+    return records
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -292,8 +310,15 @@ fix it, it alerts your team with a full diagnosis report.
 telemetry_df = _load_csv(TELEMETRY_CSV)
 healing_df = _load_csv(HEALING_LOG_CSV)
 action_df = _load_csv(ACTION_HISTORY_CSV)
+healing_json_records = _load_healing_json("data/healing_log.json")
 
-total_healing_actions = len(healing_df) + len(action_df)
+total_healing_actions = max(len(healing_df), len(healing_json_records)) + len(action_df)
+
+# Debug sidebar info
+if not telemetry_df.empty:
+    st.sidebar.markdown("---")
+    st.sidebar.write("CSV columns:", list(telemetry_df.columns))
+    st.sidebar.write("CSV rows:", len(telemetry_df))
 
 # ──────────────────────────────────────────────────────────────────────────────
 # FIX 8 — METRICS FROM REAL DATA
@@ -312,16 +337,19 @@ if not telemetry_df.empty:
         if len(valid) > 0:
             last_failure_prob = f"{valid.iloc[-1]:.3f}"
     else:
-        # Compute proxy from available metrics
+        # Compute proxy from build status + prometheus metrics
         cpu = pd.to_numeric(telemetry_df.get("prometheus_cpu_usage", pd.Series(dtype=float)),
                             errors="coerce").fillna(0)
         mem = pd.to_numeric(telemetry_df.get("prometheus_memory_usage", pd.Series(dtype=float)),
                             errors="coerce").fillna(0)
         err = pd.to_numeric(telemetry_df.get("prometheus_error_rate", pd.Series(dtype=float)),
                             errors="coerce").fillna(0)
-        proxy = (cpu / 100 * 0.3 + mem / 100 * 0.3 + err * 0.4).clip(0, 1)
-        if len(proxy) > 0 and proxy.iloc[-1] > 0:
-            last_failure_prob = f"{proxy.iloc[-1]:.3f}"
+        build_fail = telemetry_df.get("jenkins_last_build_status", pd.Series(dtype=str)).apply(
+            lambda x: 0.35 if str(x).upper() in ("FAILURE", "UNSTABLE", "ABORTED") else 0.0
+        )
+        proxy = (cpu / 100 * 0.2 + mem / 100 * 0.2 + err * 0.2 + build_fail).clip(0, 1)
+        last_val = proxy.iloc[-1] if len(proxy) > 0 else 0
+        last_failure_prob = f"{last_val:.3f}"
 
 most_common_action = "N/A"
 if not healing_df.empty and "action_name" in healing_df.columns:
@@ -386,11 +414,19 @@ with m4:
 # ──────────────────────────────────────────────────────────────────────────────
 
 mttr_df = _load_csv(MTTR_LOG_CSV)
-if not mttr_df.empty and "reduction_pct" in mttr_df.columns:
-    st.markdown('<div class="section-header"><h3>⏱ MTTR Performance</h3></div>',
-                unsafe_allow_html=True)
-    mttr_vals = pd.to_numeric(mttr_df["reduction_pct"], errors="coerce").dropna()
-    actual_vals = pd.to_numeric(mttr_df["actual_mttr_s"], errors="coerce").dropna()
+# Only show MTTR stats when we have real automated healing data (not just escalations)
+mttr_has_auto = (not mttr_df.empty
+                 and "reduction_pct" in mttr_df.columns
+                 and "action" in mttr_df.columns
+                 and not (mttr_df["action"] == "escalate_to_human").all())
+
+st.markdown('<div class="section-header"><h3>⏱ MTTR Performance</h3></div>',
+            unsafe_allow_html=True)
+
+if mttr_has_auto:
+    mttr_auto = mttr_df[mttr_df["action"] != "escalate_to_human"]
+    mttr_vals = pd.to_numeric(mttr_auto["reduction_pct"], errors="coerce").dropna()
+    actual_vals = pd.to_numeric(mttr_auto["actual_mttr_s"], errors="coerce").dropna()
 
     mc1, mc2, mc3 = st.columns(3)
     with mc1:
@@ -403,10 +439,11 @@ if not mttr_df.empty and "reduction_pct" in mttr_df.columns:
         best = mttr_vals.max() if len(mttr_vals) > 0 else 0
         st.metric("Best Reduction", f"{best:.1f}%", delta="single incident", delta_color="off")
 
-    # Show last 10 incidents
     recent_mttr = mttr_df.tail(10)[["timestamp", "failure_type", "action",
                                       "actual_mttr_s", "baseline_mttr_s", "reduction_pct"]]
     st.dataframe(recent_mttr, use_container_width=True, hide_index=True)
+else:
+    st.info("No automated healing incidents recorded yet — trigger a failure to see MTTR data.")
 
 st.markdown("---")
 
@@ -420,7 +457,7 @@ with chart_col:
     st.markdown('<div class="section-header"><h3>📈 Failure Probability — Last 50 Readings</h3></div>',
                 unsafe_allow_html=True)
 
-    if not telemetry_df.empty and "prometheus_cpu_usage" in telemetry_df.columns:
+    if not telemetry_df.empty and "timestamp" in telemetry_df.columns:
         recent = telemetry_df.tail(50).copy()
 
         if "failure_prob" in recent.columns:
@@ -755,14 +792,13 @@ st.markdown("---")
 st.markdown('<div class="section-header"><h3>🔧 Recent Healing Decisions</h3></div>',
             unsafe_allow_html=True)
 
-if not healing_df.empty:
-    display_cols = []
-    for col in ["timestamp", "build_status", "failure_prob", "pattern", "action_name", "success"]:
-        if col in healing_df.columns:
-            display_cols.append(col)
+_heal_display_df = pd.DataFrame()
 
+if not healing_df.empty:
+    display_cols = [c for c in ["timestamp", "build_status", "failure_prob", "pattern", "action_name", "success"]
+                    if c in healing_df.columns]
     if display_cols:
-        show_df = healing_df[display_cols].tail(20).iloc[::-1].copy()
+        _heal_display_df = healing_df[display_cols].tail(20).iloc[::-1].copy()
         col_map = {
             "timestamp": "Timestamp",
             "build_status": "Detected Issue",
@@ -771,10 +807,27 @@ if not healing_df.empty:
             "action_name": "Healing Action",
             "success": "Result",
         }
-        show_df = show_df.rename(columns={k: v for k, v in col_map.items() if k in show_df.columns})
-        st.dataframe(show_df, use_container_width=True, hide_index=True)
-    else:
-        st.info("Healing log exists but has no displayable columns.")
+        _heal_display_df = _heal_display_df.rename(
+            columns={k: v for k, v in col_map.items() if k in _heal_display_df.columns})
+
+# Fallback: use healing_log.json (JSONL) if CSV is empty
+if _heal_display_df.empty and healing_json_records:
+    rows = []
+    for rec in healing_json_records:
+        ctx = rec.get("context", {})
+        rows.append({
+            "Timestamp": rec.get("timestamp", ""),
+            "Healing Action": rec.get("action_name", ""),
+            "Result": "\u2705" if rec.get("success") else "\u274c",
+            "Duration": f"{rec.get('duration_ms', 0)}ms",
+            "Failure Prob": ctx.get("failure_prob", ""),
+            "Pattern": ctx.get("failure_pattern", ""),
+        })
+    if rows:
+        _heal_display_df = pd.DataFrame(rows).tail(20).iloc[::-1]
+
+if not _heal_display_df.empty:
+    st.dataframe(_heal_display_df, use_container_width=True, hide_index=True)
 elif not action_df.empty:
     st.dataframe(action_df.tail(20).iloc[::-1], use_container_width=True, hide_index=True)
 else:
@@ -815,7 +868,8 @@ if not telemetry_df.empty and "timestamp" in telemetry_df.columns:
                 c = float(cpu) / 100 if cpu and not pd.isna(cpu) else 0
                 m = float(mem) / 100 if mem and not pd.isna(mem) else 0
                 e = float(err) if err and not pd.isna(err) else 0
-                prob = round(c * 0.3 + m * 0.3 + e * 0.4, 3)
+                s = 0.35 if str(status).upper() in ("FAILURE", "UNSTABLE", "ABORTED") else 0.0
+                prob = round(c * 0.2 + m * 0.2 + e * 0.2 + s, 3)
             except (ValueError, TypeError):
                 prob = 0.0
 
