@@ -262,12 +262,59 @@ def _log_action_history(action_id: int, success: bool, duration_ms: float) -> No
     })
 
 
+# ---------------------------------------------------------------------------
+# Port-forward reconnect helper
+# ---------------------------------------------------------------------------
+
+_port_forward_proc: Optional[subprocess.Popen] = None
+
+
+def _ensure_port_forward(service: str = "dummy-app", port: int = 5000) -> None:
+    """Re-establish kubectl port-forward via svc/ after a pod restart."""
+    global _port_forward_proc
+    namespace = _namespace()
+
+    # Kill existing port-forward if stale
+    if _port_forward_proc is not None:
+        try:
+            _port_forward_proc.kill()
+            _port_forward_proc.wait(timeout=5)
+        except Exception:
+            pass
+        _port_forward_proc = None
+
+    # Wait for a ready pod
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        try:
+            r = subprocess.run(
+                ["kubectl", "get", "endpoints", service, "-n", namespace,
+                 "-o", "jsonpath={.subsets[0].addresses[0].ip}"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if r.returncode == 0 and r.stdout.strip():
+                break
+        except Exception:
+            pass
+        time.sleep(3)
+
+    # Start new port-forward via service (survives pod replacement)
+    try:
+        _port_forward_proc = subprocess.Popen(
+            ["kubectl", "port-forward", f"svc/{service}", f"{port}:{port}", "-n", namespace],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        logging.info("[PORT-FORWARD] Reconnected svc/%s on port %d", service, port)
+    except Exception as exc:
+        logging.warning("[PORT-FORWARD] Failed to reconnect: %s", exc)
+
+
 def execute_healing_action(action_id: int, context: Dict[str, str]) -> bool:
     """Execute one of 6 healing actions with REAL infrastructure calls.
 
     Actions:
-        0 â€” restart_pod:       kubectl rollout restart deployment/dummy-app
-        1 â€” scale_up:          kubectl scale deployment --replicas=3
+        0 \u2014 restart_pod:       kubectl rollout restart deployment/dummy-app
+        1 \u2014 scale_up:          kubectl scale deployment --replicas=3
         2 â€” retry_build:       POST Jenkins API to trigger new build
         3 â€” rollback_deploy:   kubectl rollout undo deployment/dummy-app
         4 â€” clear_cache:       Call dummy-app /stress to refresh, or restart pod
@@ -292,6 +339,8 @@ def execute_healing_action(action_id: int, context: Dict[str, str]) -> bool:
                 )
                 success = wait.returncode == 0
                 detail = "rollout complete" if success else wait.stderr.strip()[:200]
+                if success:
+                    _ensure_port_forward(service)
             else:
                 detail = result.stderr.strip()[:200]
 
@@ -372,6 +421,7 @@ def execute_healing_action(action_id: int, context: Dict[str, str]) -> bool:
                     capture_output=True, text=True, timeout=90,
                 )
                 if wait.returncode == 0:
+                    _ensure_port_forward(service)
                     # Verify health endpoint
                     app_url = _env("DUMMY_APP_URL", "http://localhost:5000")
                     time.sleep(5)  # give pod time to start serving
@@ -399,6 +449,8 @@ def execute_healing_action(action_id: int, context: Dict[str, str]) -> bool:
                 )
                 success = wait.returncode == 0
                 detail = "pod restarted, cache cleared" if success else wait.stderr.strip()[:200]
+                if success:
+                    _ensure_port_forward(service)
             else:
                 detail = result.stderr.strip()[:200]
 
@@ -607,6 +659,8 @@ def main() -> None:
     successful_actions = 0
     last_build_number: Optional[int] = None
     last_healed_build: Optional[int] = None  # dedup: skip if already healed this build
+    last_heal_time: float = 0.0  # cooldown: timestamp of last healing action
+    HEAL_COOLDOWN_S = 60  # seconds to wait between healing actions
 
     print(f"\n  Entering monitoring loop (Ctrl+C to stop)...")
 
@@ -703,7 +757,10 @@ def main() -> None:
             if failure_prob > 0.5 or _is_failure(build_status):
                 # Dedup: skip if we already healed this exact build
                 if build_num is not None and build_num == last_healed_build:
-                    print(f"\n  Status: Build #{build_num} already handled â€” skipping duplicate healing")
+                    print(f"\n  Status: Build #{build_num} already handled \u2014 skipping duplicate healing")
+                elif time.time() - last_heal_time < HEAL_COOLDOWN_S:
+                    remaining = int(HEAL_COOLDOWN_S - (time.time() - last_heal_time))
+                    print(f"\n  Status: Cooldown active \u2014 {remaining}s remaining before next heal")
                 else:
                     # Use PPO to choose action
                     if policy is not None:
@@ -732,6 +789,7 @@ def main() -> None:
                     # Mark as handled after execution
                     if build_num is not None:
                         last_healed_build = build_num
+                    last_heal_time = time.time()
 
                     total_actions += 1
                     if success:
