@@ -263,130 +263,220 @@ def _log_action_history(action_id: int, success: bool, duration_ms: float) -> No
 
 
 def execute_healing_action(action_id: int, context: Dict[str, str]) -> bool:
-    """Execute one of 6 healing actions based on PPO decision (with retry).
+    """Execute one of 6 healing actions with REAL infrastructure calls.
 
     Actions:
-        0 — restart_pod:          Re-trigger Jenkins build
-        1 — scale_up:             Trigger clean build (CLEAN_WORKSPACE=true)
-        2 — retry_build:          Flag for manual config review
-        3 — rollback_deploy:      Patch K8s deployment resource limits
-        4 — clear_cache:          kubectl rollout undo + wait for status
-        5 — escalate_to_human:    Write alert to escalation log
+        0 — restart_pod:       kubectl rollout restart deployment/dummy-app
+        1 — scale_up:          kubectl scale deployment --replicas=3
+        2 — retry_build:       POST Jenkins API to trigger new build
+        3 — rollback_deploy:   kubectl rollout undo deployment/dummy-app
+        4 — clear_cache:       Call dummy-app /stress to refresh, or restart pod
+        5 — escalate_to_human: Write detailed report to data/escalation_reports/
     """
     start_ms = time.time() * 1000.0
     success = False
+    detail = ""
     try:
         namespace = _namespace()
         service = context.get("affected_service", _affected_service())
 
         if action_id == 0:  # restart_pod
-            logging.info("[ACTION] restart_pod — build #%s", context.get("build_number", "?"))
-            jenkins_url = _env("JENKINS_URL", "http://localhost:8080")
-            job_name = _env("JENKINS_JOB", "build-pipeline")
-            username = _env("JENKINS_USERNAME", "admin")
-            token = _env("JENKINS_TOKEN", "")
-            build_url = f"{jenkins_url}/job/{job_name}/build"
-
-            def _trigger() -> bool:
-                r = requests.post(build_url, auth=(username, token), timeout=15)
-                if r.status_code not in {200, 201, 202}:
-                    raise RuntimeError(f"Jenkins trigger failed: {r.status_code}")
-                return True
-
-            success = retry_call(_trigger)
+            logging.info("[ACTION] restart_pod — %s in %s", service, namespace)
+            cmd = ["kubectl", "rollout", "restart", f"deployment/{service}", "-n", namespace]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            if result.returncode == 0:
+                logging.info("[ACTION] Restart issued, waiting for rollout...")
+                wait = subprocess.run(
+                    ["kubectl", "rollout", "status", f"deployment/{service}", "-n", namespace, "--timeout=60s"],
+                    capture_output=True, text=True, timeout=90,
+                )
+                success = wait.returncode == 0
+                detail = "rollout complete" if success else wait.stderr.strip()[:200]
+            else:
+                detail = result.stderr.strip()[:200]
 
         elif action_id == 1:  # scale_up
-            logging.info("[ACTION] scale_up — build #%s", context.get("build_number", "?"))
-            jenkins_url = _env("JENKINS_URL", "http://localhost:8080")
-            job_name = _env("JENKINS_JOB", "build-pipeline")
-            username = _env("JENKINS_USERNAME", "admin")
-            token = _env("JENKINS_TOKEN", "")
-            build_url = f"{jenkins_url}/job/{job_name}/buildWithParameters"
-
-            def _clean_build() -> bool:
-                r = requests.post(
-                    build_url,
-                    auth=(username, token),
-                    params={"CLEAN_WORKSPACE": "true"},
-                    timeout=15,
-                )
-                if r.status_code not in {200, 201, 202}:
-                    # Fallback: plain build if parameterised trigger unsupported
-                    r2 = requests.post(
-                        f"{jenkins_url}/job/{job_name}/build",
-                        auth=(username, token),
-                        timeout=15,
+            replicas = _scale_replicas()
+            logging.info("[ACTION] scale_up — %s to %d replicas", service, replicas)
+            cmd = ["kubectl", "scale", f"deployment/{service}", f"--replicas={replicas}", "-n", namespace]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            if result.returncode == 0:
+                # Poll until all replicas ready (max 60s)
+                deadline = time.time() + 60
+                while time.time() < deadline:
+                    chk = subprocess.run(
+                        ["kubectl", "get", "deployment", service, "-n", namespace,
+                         "-o", "jsonpath={.status.readyReplicas}"],
+                        capture_output=True, text=True, timeout=10,
                     )
-                    if r2.status_code not in {200, 201, 202}:
-                        raise RuntimeError(f"Clean build trigger failed: {r2.status_code}")
-                return True
-
-            success = retry_call(_clean_build)
-            logging.info("[ACTION] Clean & Re-run triggered")
+                    ready = chk.stdout.strip()
+                    if ready.isdigit() and int(ready) >= replicas:
+                        success = True
+                        detail = f"{ready}/{replicas} replicas ready"
+                        break
+                    time.sleep(3)
+                if not success:
+                    detail = f"timeout waiting for {replicas} replicas"
+            else:
+                detail = result.stderr.strip()[:200]
 
         elif action_id == 2:  # retry_build
-            logging.info("[ACTION] retry_build flagged — retriggering build")
-            _append_csv("data/config_regen_log.csv", {
-                "timestamp": datetime.utcnow().isoformat(),
-                "job_name": context.get("build_number", "unknown"),
-                "reason": context.get("failure_pattern", "unknown"),
-                "action_taken": "retry_build — retrigger pipeline",
-            })
-            success = True
+            logging.info("[ACTION] retry_build — triggering Jenkins build")
+            jenkins_url = _env("JENKINS_URL", "http://localhost:8080")
+            job_name = _env("JENKINS_JOB", "neuroshield-app-build")
+            username = _env("JENKINS_USERNAME", "admin")
+            token = _env("JENKINS_PASSWORD", _env("JENKINS_TOKEN", ""))
+
+            # Get current build number before triggering
+            pre_build = get_latest_build_info(jenkins_url, job_name, username, token)
+            pre_num = pre_build.number if pre_build else 0
+
+            build_url = f"{jenkins_url}/job/{job_name}/build"
+            # Fetch CSRF crumb
+            crumb_headers = {}
+            try:
+                cr = requests.get(f"{jenkins_url}/crumbIssuer/api/json", auth=(username, token), timeout=5)
+                if cr.status_code == 200:
+                    cd = cr.json()
+                    crumb_headers[cd["crumbRequestField"]] = cd["crumb"]
+            except Exception:
+                pass
+
+            r = requests.post(build_url, auth=(username, token), headers=crumb_headers, timeout=15)
+            if r.status_code in {200, 201, 202, 301, 302}:
+                logging.info("[ACTION] Build triggered, waiting for completion...")
+                # Wait for new build to appear and finish (max 120s)
+                deadline = time.time() + 120
+                while time.time() < deadline:
+                    time.sleep(5)
+                    new_build = get_latest_build_info(jenkins_url, job_name, username, token)
+                    if new_build and new_build.number > pre_num and new_build.result not in (None, "RUNNING"):
+                        success = new_build.result == "SUCCESS"
+                        detail = f"build #{new_build.number} → {new_build.result}"
+                        break
+                if not success and not detail:
+                    detail = "timeout waiting for build result"
+            else:
+                detail = f"Jenkins trigger HTTP {r.status_code}"
 
         elif action_id == 3:  # rollback_deploy
             logging.info("[ACTION] rollback_deploy — %s in %s", service, namespace)
-            patch_json = json.dumps({
-                "spec": {"template": {"spec": {"containers": [{
-                    "name": service,
-                    "resources": {"limits": {"cpu": "500m", "memory": "512Mi"}},
-                }]}}}
-            })
-            cmd = [
-                "kubectl", "patch", "deployment", service,
-                "-n", namespace,
-                "--type=strategic",
-                f"--patch={patch_json}",
-            ]
-
-            def _patch() -> bool:
-                subprocess.run(cmd, capture_output=True, text=True, check=True)
-                return True
-
-            success = retry_call(_patch)
+            undo = subprocess.run(
+                ["kubectl", "rollout", "undo", f"deployment/{service}", "-n", namespace],
+                capture_output=True, text=True, timeout=30,
+            )
+            if undo.returncode == 0:
+                wait = subprocess.run(
+                    ["kubectl", "rollout", "status", f"deployment/{service}", "-n", namespace, "--timeout=60s"],
+                    capture_output=True, text=True, timeout=90,
+                )
+                if wait.returncode == 0:
+                    # Verify health endpoint
+                    app_url = _env("DUMMY_APP_URL", "http://localhost:5000")
+                    time.sleep(5)  # give pod time to start serving
+                    try:
+                        hr = requests.get(f"{app_url}/health", timeout=5)
+                        success = hr.status_code == 200
+                        detail = f"health={hr.status_code} after rollback"
+                    except Exception:
+                        success = True  # rollout succeeded even if app not reachable from host
+                        detail = "rollback complete, health check unreachable"
+                else:
+                    detail = wait.stderr.strip()[:200]
+            else:
+                detail = undo.stderr.strip()[:200]
 
         elif action_id == 4:  # clear_cache
-            logging.info("[ACTION] clear_cache — %s in %s", service, namespace)
-            undo_cmd = ["kubectl", "rollout", "undo", f"deploy/{service}", "-n", namespace]
-            status_cmd = ["kubectl", "rollout", "status", f"deploy/{service}", "-n", namespace, "--timeout=60s"]
-
-            def _rollback_and_wait() -> bool:
-                subprocess.run(undo_cmd, capture_output=True, text=True, check=True)
-                subprocess.run(status_cmd, capture_output=True, text=True, check=True)
-                return True
-
-            success = retry_call(_rollback_and_wait)
+            logging.info("[ACTION] clear_cache — restarting %s to free memory", service)
+            # Restart pod to clear all in-memory state
+            cmd = ["kubectl", "rollout", "restart", f"deployment/{service}", "-n", namespace]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            if result.returncode == 0:
+                wait = subprocess.run(
+                    ["kubectl", "rollout", "status", f"deployment/{service}", "-n", namespace, "--timeout=60s"],
+                    capture_output=True, text=True, timeout=90,
+                )
+                success = wait.returncode == 0
+                detail = "pod restarted, cache cleared" if success else wait.stderr.strip()[:200]
+            else:
+                detail = result.stderr.strip()[:200]
 
         elif action_id == 5:  # escalate_to_human
-            logging.info("[ACTION] Escalated to human review — check data/escalation_log.csv")
-            _append_csv("data/escalation_log.csv", {
+            logging.info("[ACTION] escalate_to_human — writing escalation report")
+            report_dir = Path("data/escalation_reports")
+            report_dir.mkdir(parents=True, exist_ok=True)
+            ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+            report_path = report_dir / f"escalation_{ts}.json"
+
+            report = {
                 "timestamp": datetime.utcnow().isoformat(),
+                "failure_type": context.get("failure_pattern", "unknown"),
                 "failure_probability": context.get("failure_prob", "?"),
-                "failure_state": context.get("failure_pattern", "unknown"),
-                "recommended_action": "escalate_to_human",
-                "status": "PENDING_HUMAN_REVIEW",
-            })
+                "build_number": context.get("build_number", "?"),
+                "affected_service": service,
+                "namespace": namespace,
+                "actions_already_tried": context.get("actions_tried", "none"),
+                "system_state": {
+                    "suggestion": "Investigate root cause manually",
+                },
+                "suggested_fix": "Review application logs and recent code changes",
+            }
+
+            # Get current pod status for report
+            try:
+                pods = subprocess.run(
+                    ["kubectl", "get", "pods", "-n", namespace, "-l", f"app={service}", "-o", "wide"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                report["system_state"]["pod_status"] = pods.stdout.strip()
+            except Exception:
+                pass
+
+            with open(report_path, "w", encoding="utf-8") as f:
+                json.dump(report, f, indent=2)
+
+            print(f"\n{'=' * 60}")
+            print(f"  ESCALATION REPORT: {report_path}")
+            print(f"{'=' * 60}")
+            print(json.dumps(report, indent=2))
+            print(f"{'=' * 60}\n")
+
             success = True
+            detail = str(report_path)
 
         else:
             logging.warning("Unknown action id: %s", action_id)
 
     except Exception as exc:
         logging.exception("Error executing action %s: %s", action_id, exc)
+        detail = str(exc)[:200]
 
     duration_ms = time.time() * 1000.0 - start_ms
     _log_action_history(action_id, success, duration_ms)
+    _log_healing_json(action_id, success, duration_ms, detail, context)
+
+    if not success:
+        logging.warning("[ACTION] %s FAILED (%s) — will retry once", ACTION_NAMES.get(action_id, "?"), detail)
+
     return success
+
+
+def _log_healing_json(action_id: int, success: bool, duration_ms: float,
+                      detail: str, context: Dict[str, str]) -> None:
+    """Append every healing action to data/healing_log.json as a JSON-lines file."""
+    p = Path("data/healing_log.json")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    entry = {
+        "timestamp": datetime.utcnow().isoformat(),
+        "action_id": action_id,
+        "action_name": ACTION_NAMES.get(action_id, "unknown"),
+        "success": success,
+        "duration_ms": round(duration_ms),
+        "detail": detail,
+        "context": context,
+    }
+    with open(p, "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry) + "\n")
 
 
 def _is_failure(result: str) -> bool:
