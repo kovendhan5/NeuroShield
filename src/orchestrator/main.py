@@ -332,17 +332,18 @@ def execute_healing_action(action_id: int, context: Dict[str, str]) -> bool:
             pre_num = pre_build.number if pre_build else 0
 
             build_url = f"{jenkins_url}/job/{job_name}/build"
-            # Fetch CSRF crumb
-            crumb_headers = {}
+            # Use a session so CSRF crumb cookie + header travel together
+            sess = requests.Session()
+            sess.auth = (username, token)
             try:
-                cr = requests.get(f"{jenkins_url}/crumbIssuer/api/json", auth=(username, token), timeout=5)
+                cr = sess.get(f"{jenkins_url}/crumbIssuer/api/json", timeout=5)
                 if cr.status_code == 200:
                     cd = cr.json()
-                    crumb_headers[cd["crumbRequestField"]] = cd["crumb"]
+                    sess.headers.update({cd["crumbRequestField"]: cd["crumb"]})
             except Exception:
                 pass
 
-            r = requests.post(build_url, auth=(username, token), headers=crumb_headers, timeout=15)
+            r = sess.post(build_url, timeout=15)
             if r.status_code in {200, 201, 202, 301, 302}:
                 logging.info("[ACTION] Build triggered, waiting for completion...")
                 # Wait for new build to appear and finish (max 120s)
@@ -822,7 +823,7 @@ def run_single_cycle() -> Dict[str, str]:
     jenkins_url = _env("JENKINS_URL", "http://localhost:8080")
     jenkins_user = _env("JENKINS_USERNAME", "admin")
     jenkins_token = _env("JENKINS_TOKEN", "")
-    job_name = _env("JENKINS_JOB", "build-pipeline")
+    job_name = _env("JENKINS_JOB", "neuroshield-app-build")
     prom_url = _env("PROMETHEUS_URL", "http://localhost:9090")
     app_url = _env("DUMMY_APP_URL", "http://localhost:5000")
 
