@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import time
+import webbrowser
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,6 +26,8 @@ from dotenv import load_dotenv
 from stable_baselines3 import PPO
 
 from src.prediction.predictor import FailurePredictor, build_52d_state
+from src.utils.notifications import send_desktop_notification, send_email_alert, write_active_alert
+from src.utils.intelligence import detect_early_warning, explain_decision
 
 T = TypeVar("T")
 
@@ -57,6 +60,9 @@ MTTR_BASELINES: Dict[str, float] = {
     "clear_cache": 45.0,
     "escalate_to_human": 300.0,
 }
+
+# Reverse lookup: action name → action id
+_ACTION_IDS: Dict[str, int] = {v: k for k, v in ACTION_NAMES.items()}
 
 
 def _log_mttr(failure_type: str, action_name: str, actual_mttr: float) -> None:
@@ -512,6 +518,29 @@ def execute_healing_action(action_id: int, context: Dict[str, str]) -> bool:
             with open(report_path, "w", encoding="utf-8") as f:
                 json.dump(report, f, indent=2)
 
+            # --- Notify all channels ---
+            esc_reason = context.get("escalation_reason", (
+                f"High confidence failure: prob={context.get('failure_prob', '?')}, "
+                f"pattern={context.get('failure_pattern', 'unknown')}"
+            ))
+
+            send_desktop_notification("NeuroShield: Human Intervention Required", esc_reason)
+            send_email_alert("Human Intervention Required", json.dumps(report, indent=2))
+            write_active_alert(
+                title="Human Intervention Required",
+                message=esc_reason,
+                severity="HIGH",
+                details=report,
+            )
+
+            # Generate human-readable HTML report and open in browser
+            try:
+                report_context = {**context, **report.get("system_state", {})}
+                report_id, html_path = generate_incident_report(report_context, "escalate_to_human", esc_reason)
+                logging.info("[ACTION] HTML incident report: %s", html_path)
+            except Exception as exc:
+                logging.warning("[ACTION] HTML report generation failed: %s", exc)
+
             print(f"\n{'=' * 60}")
             print(f"  ESCALATION REPORT: {report_path}")
             print(f"{'=' * 60}")
@@ -597,18 +626,25 @@ def _check_service(url: str, timeout: int = 5) -> Tuple[bool, float]:
 
 
 def _collect_prometheus_metrics(prom_url: str) -> Dict[str, float]:
-    """Query Prometheus for CPU, memory, pod count, error rate."""
+    """Query Prometheus for CPU, memory, pod count, error rate, pod restarts.
+
+    Uses node-level metrics that are always available in Minikube.
+    Falls back to psutil for CPU/memory if Prometheus returns zero/NaN.
+    """
     metrics: Dict[str, float] = {
         "cpu_usage": 0.0,
         "memory_usage": 0.0,
         "pod_count": 0.0,
         "error_rate": 0.0,
+        "pod_restarts": 0.0,
     }
+    # Node-level queries — reliable in Minikube (no container-spec limits required)
     queries = {
-        "cpu_usage": 'rate(container_cpu_usage_seconds_total[1m])',
-        "memory_usage": '(container_memory_working_set_bytes / container_spec_memory_limit_bytes) * 100',
+        "cpu_usage": '100 - (avg(rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)',
+        "memory_usage": '(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100',
         "pod_count": 'count(kube_pod_info)',
-        "error_rate": 'rate(http_requests_total{code=~"5.."}[5m])',
+        "error_rate": 'rate(flask_http_request_total{status=~"5.."}[5m]) or vector(0)',
+        "pod_restarts": 'sum(kube_pod_container_status_restarts_total{namespace="default"}) or vector(0)',
     }
     for key, query in queries.items():
         try:
@@ -616,9 +652,23 @@ def _collect_prometheus_metrics(prom_url: str) -> Dict[str, float]:
             if r.status_code == 200:
                 results = r.json().get("data", {}).get("result", [])
                 if results:
-                    metrics[key] = float(results[0]["value"][1])
+                    val = float(results[0]["value"][1])
+                    if val == val:  # NaN guard
+                        metrics[key] = val
         except Exception:
             pass
+
+    # psutil fallback: if Prometheus CPU/memory still zero, use real host metrics
+    if metrics["cpu_usage"] == 0.0 or metrics["memory_usage"] == 0.0:
+        try:
+            import psutil as _psutil
+            if metrics["cpu_usage"] == 0.0:
+                metrics["cpu_usage"] = _psutil.cpu_percent(interval=0.1)
+            if metrics["memory_usage"] == 0.0:
+                metrics["memory_usage"] = _psutil.virtual_memory().percent
+        except Exception as exc:
+            logging.debug("psutil fallback failed: %s", exc)
+
     return metrics
 
 
@@ -642,6 +692,172 @@ def _collect_dummy_app_health(app_url: str) -> Dict[str, float]:
 def _save_telemetry_row(row: Dict[str, str]) -> None:
     """Append a telemetry row to data/telemetry.csv."""
     _append_csv("data/telemetry.csv", row)
+
+
+# ---------------------------------------------------------------------------
+# Rule-based + ML action selection
+# ---------------------------------------------------------------------------
+
+def determine_healing_action(
+    telemetry: Dict,
+    ml_action: str,
+    prob: float,
+) -> Tuple[str, str]:
+    """Select a healing action using rules first, falling back to the ML decision.
+
+    Rule-based overrides ensure all 6 healing actions can trigger in a demo:
+    - pod restart loop → restart_pod
+    - CPU/memory spike → scale_up
+    - build failure → retry_build
+    - high error rate → rollback_deploy
+    - memory elevated + build OK → clear_cache
+    - very high confidence anomaly → escalate_to_human
+    - otherwise → use ML model decision
+
+    Returns:
+        (action_name, human_readable_reason)
+    """
+    cpu = float(telemetry.get("prometheus_cpu_usage", 0) or 0)
+    memory = float(telemetry.get("prometheus_memory_usage", 0) or 0)
+    pod_restarts = float(telemetry.get("pod_restart_count", 0) or 0)
+    build_status = str(telemetry.get("jenkins_last_build_status", "") or "").upper()
+    error_rate = float(telemetry.get("prometheus_error_rate", 0) or 0)
+
+    if pod_restarts >= 3:
+        return "restart_pod", f"Pod restart loop detected ({int(pod_restarts)} restarts)"
+
+    if cpu > 80 or memory > 85:
+        return "scale_up", f"Resource spike: CPU={cpu:.0f}% MEM={memory:.0f}%"
+
+    if build_status in ("FAILURE", "UNSTABLE", "ABORTED") and prob >= 0.5:
+        return "retry_build", f"Build status: {build_status}"
+
+    if error_rate > 0.3:
+        return "rollback_deploy", f"High HTTP error rate: {error_rate:.3f} req/s"
+
+    if memory > 70 and build_status == "SUCCESS":
+        return "clear_cache", f"Memory elevated ({memory:.0f}%) with healthy build"
+
+    if prob >= 0.85:
+        return "escalate_to_human", f"High confidence anomaly (prob={prob:.3f})"
+
+    # Fall back to ML model decision
+    return ml_action, f"ML model decision (prob={prob:.3f})"
+
+
+# ---------------------------------------------------------------------------
+# Incident HTML report generator
+# ---------------------------------------------------------------------------
+
+def generate_incident_report(context: Dict, action_name: str, reason: str) -> Tuple[str, str]:
+    """Generate a professional HTML incident report and open it in the browser.
+
+    Args:
+        context: Dict with failure_prob, failure_pattern, build_number, etc.
+        action_name: The healing action taken.
+        reason: Human-readable reason for the action.
+
+    Returns:
+        (report_id, report_path_str)
+    """
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    report_id = f"INC-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+
+    cpu = context.get("prometheus_cpu_usage", "N/A")
+    memory = context.get("prometheus_memory_usage", "N/A")
+    build_status = context.get("jenkins_last_build_status", "N/A")
+    build_num = context.get("build_number", "N/A")
+    failure_prob = context.get("failure_prob", "N/A")
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+    <title>NeuroShield Incident Report {report_id}</title>
+    <style>
+        body {{ font-family: Arial, sans-serif; max-width: 800px; margin: 40px auto;
+               background: #f9f9f9; color: #333; }}
+        .header {{ background: #1a1a2e; color: white; padding: 20px 28px;
+                  border-radius: 8px; margin-bottom: 24px; }}
+        .header h1 {{ margin: 0 0 8px 0; font-size: 1.5rem; }}
+        .header p {{ margin: 0; color: #a0aec0; font-size: 0.9rem; }}
+        .section {{ background: white; border: 1px solid #e2e8f0; border-radius: 8px;
+                   padding: 20px; margin-bottom: 16px; }}
+        .section h2 {{ margin-top: 0; color: #1a1a2e; font-size: 1.1rem; }}
+        .critical {{ color: #c53030; font-weight: bold; background: #fff5f5;
+                   padding: 10px 14px; border-radius: 6px; border-left: 4px solid #c53030; }}
+        .metric {{ display: inline-block; background: #edf2f7; padding: 8px 14px;
+                  border-radius: 6px; margin: 4px; font-size: 0.9rem; }}
+        table {{ width: 100%; border-collapse: collapse; }}
+        th, td {{ padding: 10px 14px; border: 1px solid #e2e8f0; text-align: left; }}
+        th {{ background: #1a1a2e; color: white; }}
+        tr:nth-child(even) {{ background: #f7fafc; }}
+        a {{ color: #3182ce; }}
+        .badge {{ display: inline-block; padding: 2px 10px; border-radius: 12px;
+                 font-size: 0.8rem; font-weight: 600; background: #fed7d7; color: #c53030; }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>&#128737; NeuroShield Incident Report</h1>
+        <p>Report ID: <strong>{report_id}</strong> &nbsp;|&nbsp; Generated: {timestamp}</p>
+    </div>
+
+    <div class="section">
+        <h2>&#9888; Incident Summary</h2>
+        <p class="critical">{reason}</p>
+        <p>
+            <span class="metric">Action: <strong>{action_name}</strong></span>
+            <span class="metric">Build: <strong>#{build_num}</strong></span>
+            <span class="metric">Failure Prob: <strong>{failure_prob}</strong></span>
+        </p>
+    </div>
+
+    <div class="section">
+        <h2>&#128200; System State at Time of Incident</h2>
+        <span class="metric">CPU: {cpu}%</span>
+        <span class="metric">Memory: {memory}%</span>
+        <span class="metric">Build Status: {build_status}</span>
+    </div>
+
+    <div class="section">
+        <h2>&#128270; Recommended Actions</h2>
+        <ol>
+            <li>Check Jenkins build logs at
+                <a href="http://localhost:8080">localhost:8080</a></li>
+            <li>Check pod status: <code>kubectl get pods</code></li>
+            <li>Review recent deployments:
+                <code>kubectl rollout history deployment/dummy-app</code></li>
+            <li>Check application logs:
+                <code>kubectl logs deployment/dummy-app</code></li>
+            <li>View NeuroShield dashboard:
+                <a href="http://localhost:8501">localhost:8501</a></li>
+        </ol>
+    </div>
+
+    <div class="section">
+        <h2>&#128279; Quick Links</h2>
+        <p>
+            <a href="http://localhost:8080/job/neuroshield-app-build/">Jenkins Job</a> &nbsp;|&nbsp;
+            <a href="http://localhost:9090">Prometheus</a> &nbsp;|&nbsp;
+            <a href="http://localhost:8501">NeuroShield Dashboard</a>
+        </p>
+    </div>
+</body>
+</html>
+"""
+
+    report_dir = Path("data/escalation_reports")
+    report_dir.mkdir(parents=True, exist_ok=True)
+    report_path = report_dir / f"{report_id}.html"
+    report_path.write_text(html, encoding="utf-8")
+
+    # Auto-open in browser (best-effort; skip during testing/offline)
+    try:
+        webbrowser.open(f"file:///{report_path.absolute()}")
+    except Exception:
+        pass
+
+    return report_id, str(report_path)
 
 
 def _print_banner() -> None:
@@ -709,6 +925,7 @@ def main() -> None:
     failure_detected_time: Optional[float] = None  # MTTR: when NEW failure first detected
     prev_build_status: Optional[str] = None  # track state transitions for MTTR
     mttr_measurements: list = []  # MTTR: list of reduction percentages for summary
+    telemetry_history: list = []  # rolling window for early warning detection
 
     print(f"\n  Entering monitoring loop (Ctrl+C to stop)...")
 
@@ -729,7 +946,8 @@ def main() -> None:
 
             # --- Step 2: Collect telemetry ---
             prom_metrics = _collect_prometheus_metrics(prom_url) if prom_ok else {
-                "cpu_usage": 0, "memory_usage": 0, "pod_count": 0, "error_rate": 0}
+                "cpu_usage": 0.0, "memory_usage": 0.0, "pod_count": 0.0,
+                "error_rate": 0.0, "pod_restarts": 0.0}
             app_health = _collect_dummy_app_health(app_url) if app_ok else {
                 "health_pct": 0, "response_ms": 0}
 
@@ -774,6 +992,7 @@ def main() -> None:
                 "prometheus_memory_usage": prom_metrics["memory_usage"],
                 "prometheus_pod_count": prom_metrics["pod_count"],
                 "prometheus_error_rate": prom_metrics["error_rate"],
+                "pod_restart_count": prom_metrics.get("pod_restarts", 0.0),
             }
 
             if not log_text:
@@ -788,6 +1007,14 @@ def main() -> None:
             prob_label = "LOW" if failure_prob < 0.3 else "MEDIUM" if failure_prob < 0.6 else "HIGH" if failure_prob < 0.8 else "CRITICAL"
             print(f"\n  Prediction:")
             print(f"    Failure Prob: [{prob_bar}] {failure_prob:.3f} ({prob_label})")
+
+            # --- Early warning detection (flags trends before threshold is crossed) ---
+            telemetry_history.append(telemetry_dict)
+            if len(telemetry_history) > 20:
+                telemetry_history = telemetry_history[-20:]
+            warn_action, warn_conf = detect_early_warning(telemetry_history)
+            if warn_action and failure_prob < 0.5:
+                print(f"    Early Warning: Trending toward {warn_action} (conf={warn_conf:.0%})")
 
             # --- Step 4: RL Agent decision ---
             jenkins_data = {
@@ -818,25 +1045,31 @@ def main() -> None:
                     remaining = int(HEAL_COOLDOWN_S - (time.time() - _read_cooldown_ts()))
                     print(f"\n  Status: Cooldown active \u2014 {remaining}s remaining before next heal")
                 else:
-                    # Use PPO to choose action
+                    # Use PPO to choose action initially
                     if policy is not None:
                         action, _ = policy.predict(state_52d, deterministic=True)
                         action_id = int(action)
                     else:
                         action_id = 0  # default to restart_pod
 
-                    # Override: FAILURE build -> retry_build unless pattern says otherwise
-                    if _is_failure(build_status) and pattern_action is None:
-                        action_id = 2  # retry_build
+                    # Apply rule-based + ML hybrid selection
+                    # (ensures all 6 actions trigger in realistic conditions)
+                    ml_action_name = ACTION_NAMES.get(action_id, "restart_pod")
+                    action_name, action_reason = determine_healing_action(
+                        telemetry_dict, ml_action_name, failure_prob
+                    )
+                    action_id = _ACTION_IDS.get(action_name, action_id)
 
-                    if pattern_action is not None and failure_prob > 0.5:
-                        action_id = pattern_action
+                    # Explainable AI: why did we choose this action?
+                    decision_explain = explain_decision(telemetry_dict, action_name, failure_prob)
 
-                    action_name = ACTION_NAMES.get(action_id, f"action_{action_id}")
                     print(f"\n  RL Agent Decision:")
-                    print(f"    Pattern:  {pattern}")
-                    print(f"    Action:   [{action_id}] {action_name}")
-                    print(f"    Reason:   failure_prob={failure_prob:.3f}, build={build_status}")
+                    print(f"    Pattern:    {pattern}")
+                    print(f"    Action:     [{action_id}] {action_name}")
+                    print(f"    Reason:     {action_reason}")
+                    print(f"    Confidence: {decision_explain['confidence']}")
+                    for r_str in decision_explain["reasons"]:
+                        print(f"      - {r_str}")
 
                     # Execute healing action
                     success = execute_healing_action(action_id, {
@@ -844,6 +1077,10 @@ def main() -> None:
                         "affected_service": _affected_service(),
                         "failure_prob": f"{failure_prob:.3f}",
                         "failure_pattern": pattern or "none",
+                        "escalation_reason": action_reason,
+                        "prometheus_cpu_usage": f"{prom_metrics['cpu_usage']:.1f}",
+                        "prometheus_memory_usage": f"{prom_metrics['memory_usage']:.1f}",
+                        "jenkins_last_build_status": build_status,
                     })
 
                     # Mark as handled after execution
@@ -1007,6 +1244,7 @@ def run_single_cycle() -> Dict[str, str]:
         "jenkins_queue_length": 0,
         "prometheus_cpu_usage": 0, "prometheus_memory_usage": 0,
         "prometheus_pod_count": 0, "prometheus_error_rate": 0,
+        "pod_restart_count": 0,
     }
     failure_prob = predictor.predict(log_text, telemetry_dict)
     if failure_prob != failure_prob:  # NaN guard
@@ -1031,17 +1269,18 @@ def run_single_cycle() -> Dict[str, str]:
     else:
         action_id = 0
 
-    # Override: FAILURE build -> retry_build
-    if _is_failure(build_status):
-        action_id = 2  # retry_build
-
-    action_name = ACTION_NAMES.get(action_id, f"action_{action_id}")
+    # Rule-based + ML hybrid selection (same logic as main loop)
+    ml_action_name = ACTION_NAMES.get(action_id, "restart_pod")
+    action_name, action_reason = determine_healing_action(telemetry_dict, ml_action_name, failure_prob)
+    action_id = _ACTION_IDS.get(action_name, action_id)
     heal_start = time.time()
     success = execute_healing_action(action_id, {
         "build_number": str(build.number if build else 0),
         "affected_service": _affected_service(),
         "failure_prob": f"{failure_prob:.3f}",
         "failure_pattern": "manual_trigger",
+        "escalation_reason": action_reason,
+        "jenkins_last_build_status": build_status,
     })
 
     # Update file-based cooldown

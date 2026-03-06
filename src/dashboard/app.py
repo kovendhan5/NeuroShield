@@ -23,6 +23,7 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 from src.prediction.predictor import FailurePredictor, telemetry_to_vector
+from src.utils.intelligence import detect_early_warning, explain_decision
 
 # ──────────────────────────────────────────────────────────────────────────────
 # FIX 7 — Page config with title and favicon
@@ -337,6 +338,25 @@ st.markdown(badges, unsafe_allow_html=True)
 
 st.markdown("---")
 
+# ── Active escalation alert banner ─────────────────────────────────────────
+_alert_path = Path("data/active_alert.json")
+if _alert_path.exists():
+    try:
+        _alert_data = json.loads(_alert_path.read_text(encoding="utf-8"))
+        if _alert_data.get("active"):
+            _alert_ts = str(_alert_data.get("timestamp", ""))[:19]
+            st.error(
+                f"🚨 **ESCALATION ALERT: {_alert_data.get('title', 'Human Intervention Required')}**\n\n"
+                f"{_alert_data.get('message', '')}\n\n"
+                f"**Time:** {_alert_ts}"
+            )
+            if st.button("✅ Mark as Resolved", key="resolve_active_alert"):
+                _alert_data["active"] = False
+                _alert_path.write_text(json.dumps(_alert_data, indent=2), encoding="utf-8")
+                st.rerun()
+    except Exception:
+        pass
+
 # ──────────────────────────────────────────────────────────────────────────────
 # FIX 1 — HERO SECTION
 # ──────────────────────────────────────────────────────────────────────────────
@@ -590,6 +610,19 @@ with pie_col:
 
 st.markdown("---")
 
+# ── Early Warning Indicator (predictive healing) ──────────────────────────
+if not df_recent.empty:
+    _telem_history = df_recent.tail(10).to_dict("records")
+    try:
+        _warn_action, _warn_conf = detect_early_warning(_telem_history)
+        if _warn_action:
+            st.warning(
+                f"⚠️ **Early Warning:** System trending toward **{_warn_action}** "
+                f"(confidence: {_warn_conf:.0%}) — pre-emptive healing may activate soon"
+            )
+    except Exception:
+        pass
+
 # ──────────────────────────────────────────────────────────────────────────────
 # FIX 2 — LIVE SCENARIO SIMULATOR
 # ──────────────────────────────────────────────────────────────────────────────
@@ -677,6 +710,79 @@ with ctrl_col4:
             st.error("Deployed v2-broken — /health will return 500")
         else:
             st.error(f"kubectl error: {r1.stderr[:200]}")
+
+# ── Scenario 4, 5, 6 — Advanced Demo Buttons ──────────────────────────────
+st.markdown("**Advanced Scenarios** (triggers non-retry-build actions):")
+adv_col1, adv_col2, adv_col3 = st.columns(3)
+
+with adv_col1:
+    if st.button("⚡ CPU Spike → scale_up", use_container_width=True,
+                 help="Spawns a CPU-intensive process. scale_up triggers when CPU > 80%."):
+        import sys as _sys
+        import subprocess as _sp
+        try:
+            proc = _sp.Popen(
+                [_sys.executable, "-c",
+                 "import time; start=time.time();"
+                 "[sum(range(10**6)) for _ in iter(int,1) if time.time()-start<25]"],
+                stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+            )
+            st.success(f"✅ CPU spike started (PID {proc.pid}) — scale_up should trigger in ~15s")
+            st.code("kubectl get pods --watch", language="bash")
+        except Exception as e:
+            st.error(f"Could not start CPU process: {e}")
+
+with adv_col2:
+    if st.button("🧠 Memory Leak → clear_cache", use_container_width=True,
+                 help="Calls /stress to allocate 200 MB. clear_cache triggers when memory > 70%."):
+        try:
+            r = requests.get(f"{DUMMY_APP_URL}/stress", timeout=10)
+            if r.status_code == 200:
+                d = r.json()
+                st.success(
+                    f"✅ Memory stress: {d.get('memory_before_mb', '?')} → "
+                    f"{d.get('memory_after_mb', '?')} MB for {d.get('duration_seconds', 30)}s"
+                )
+                st.info("clear_cache should trigger when memory > 70% with healthy build")
+            else:
+                st.error(f"Stress returned {r.status_code}")
+        except Exception as e:
+            st.error(f"App unreachable: {e}")
+
+with adv_col3:
+    if st.button("🚨 Escalate to Human", use_container_width=True,
+                 help="Directly triggers escalation: shows desktop notification, writes alert banner."):
+        try:
+            from src.utils.notifications import (
+                send_desktop_notification, write_active_alert
+            )
+            from src.orchestrator.main import generate_incident_report
+            _ctx = {
+                "failure_prob": "0.92",
+                "failure_pattern": "ManualEscalation",
+                "build_number": "demo",
+                "escalation_reason": "Dashboard-triggered escalation demo",
+                "prometheus_cpu_usage": "35",
+                "prometheus_memory_usage": "68",
+                "jenkins_last_build_status": "FAILURE",
+            }
+            write_active_alert(
+                title="Human Intervention Required",
+                message="Dashboard-triggered escalation demo",
+                severity="HIGH",
+                details=_ctx,
+            )
+            send_desktop_notification(
+                "NeuroShield: Escalation Demo",
+                "Human Intervention Required — see dashboard",
+            )
+            _rid, _rpath = generate_incident_report(
+                _ctx, "escalate_to_human", "Dashboard-triggered escalation demo"
+            )
+            st.error(f"🚨 Escalation triggered! Alert banner active. Report: {_rpath}")
+            st.rerun()
+        except Exception as e:
+            st.error(f"Escalation failed: {e}")
 
 # ── Pod Status Widget (real kubectl) ─────────────────────────────────────
 st.markdown('<div class="section-header"><h3>🖥️ Live Infrastructure Status</h3></div>',
@@ -862,12 +968,32 @@ if _heal_json_path.exists():
         try:
             _hr = json.loads(_hl_line)
             _hctx = _hr.get("context", {})
+            _action = _hr.get("action_name", "")
+            _prob = float(_hctx.get("failure_prob", 0))
+
+            # Build telemetry snapshot for explain_decision
+            _tel_snap = {
+                "jenkins_last_build_status": _hctx.get("jenkins_last_build_status", ""),
+                "prometheus_cpu_usage": float(_hctx.get("prometheus_cpu_usage", 0) or 0),
+                "prometheus_memory_usage": float(_hctx.get("prometheus_memory_usage", 0) or 0),
+                "pod_restart_count": 0,
+                "prometheus_error_rate": 0,
+            }
+            try:
+                _expl = explain_decision(_tel_snap, _action, _prob)
+                _reasons_str = "; ".join(_expl["reasons"])
+                _confidence = _expl["confidence"]
+            except Exception:
+                _reasons_str = ""
+                _confidence = f"{_prob:.1%}"
+
             _heal_rows.append({
                 "Time": str(_hr.get("timestamp", ""))[:19],
-                "Action": _hr.get("action_name", ""),
+                "Action": _action,
                 "Result": "✅" if _hr.get("success") else "❌",
-                "Prob": round(float(_hctx.get("failure_prob", 0)), 3),
+                "Confidence": _confidence,
                 "Pattern": _hctx.get("failure_pattern", ""),
+                "Reasons": _reasons_str,
             })
         except Exception:
             pass

@@ -79,19 +79,19 @@ class TestPrometheusPoll:
     
     @patch('requests.Session.get')
     def test_get_cpu_usage(self, mock_get):
-        """Test CPU usage fetch."""
+        """Test CPU usage fetch — new node-level query returns percentage directly."""
         mock_response = Mock()
         mock_response.json.return_value = {
             'data': {
-                'result': [{'value': [1234567890, '0.5']}]
+                'result': [{'value': [1234567890, '50.0']}]
             }
         }
         mock_response.raise_for_status.return_value = None
         mock_get.return_value = mock_response
-        
+
         prometheus = PrometheusPoll('http://localhost:9090')
         result = prometheus.get_cpu_usage()
-        
+
         assert result == 50.0
 
 
