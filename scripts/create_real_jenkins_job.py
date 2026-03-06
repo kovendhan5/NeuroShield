@@ -6,7 +6,7 @@ Usage:
 
 The job has three shell build steps:
   1. Build stage   — echo compile
-  2. Test stage    — randomly fails ~60 % of the time
+  2. Test stage    — randomly fails ~35 % of the time (shell-only, no python3)
   3. Deploy stage  — echo deploy (only reached if tests pass)
 """
 
@@ -25,7 +25,7 @@ JOB_NAME = "neuroshield-app-build"
 CONFIG_XML = """\
 <?xml version='1.1' encoding='UTF-8'?>
 <project>
-  <description>NeuroShield demo build — test stage randomly fails 60%%</description>
+  <description>NeuroShield demo build — test stage randomly fails ~35%</description>
   <keepDependencies>false</keepDependencies>
   <properties/>
   <scm class="hudson.scm.NullSCM"/>
@@ -44,16 +44,14 @@ echo "Build complete."</command>
     </hudson.tasks.Shell>
     <hudson.tasks.Shell>
       <command>echo "=== Stage: Test ==="
-python3 -c "
-import random, sys
-score = random.random()
-print(f'Running tests... score: {score:.2f}')
-if score &lt; 0.6:
-    print('TESTS FAILED — flaky test detected')
-    sys.exit(1)
-else:
-    print('All tests passed.')
-"</command>
+score=$(awk 'BEGIN{srand(); printf "%d", rand()*100}')
+echo "Test score: $score"
+if [ "$score" -gt 35 ]; then
+    echo "Tests PASSED"
+else
+    echo "Tests FAILED - score too low"
+    exit 1
+fi</command>
     </hudson.tasks.Shell>
     <hudson.tasks.Shell>
       <command>echo "=== Stage: Deploy ==="
