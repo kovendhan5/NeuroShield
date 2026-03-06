@@ -14,7 +14,7 @@ import os
 import subprocess
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
@@ -321,7 +321,7 @@ def scenario_bad_deploy() -> None:
     # Force a rollout by touching annotation
     kubectl("patch", "deployment", DEPLOYMENT, "-n", NAMESPACE,
             "-p", '{"spec":{"template":{"metadata":{"annotations":{"deploy-ts":"' +
-                   datetime.utcnow().isoformat() + '"}}}}}')
+                   datetime.now(timezone.utc).isoformat() + '"}}}}}')
 
     wait_with_dots("Waiting for bad deployment to roll out", 15)
 

@@ -603,8 +603,8 @@ if healing_log_json.exists():
         if lines:
             last = json.loads(lines[-1])
             # If last action was < 30s ago, consider "actively healing"
-            last_ts = datetime.fromisoformat(last.get("timestamp", "2000-01-01"))
-            delta = (datetime.utcnow() - last_ts).total_seconds()
+            last_ts = datetime.fromisoformat(last.get("timestamp", "2000-01-01")).replace(tzinfo=timezone.utc)
+            delta = (datetime.now(timezone.utc) - last_ts).total_seconds()
             if delta < 30 and not last.get("success", True):
                 is_healing = True
     except Exception:

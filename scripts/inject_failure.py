@@ -18,7 +18,7 @@ import random
 import subprocess
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
@@ -109,7 +109,7 @@ def inject_bad_deploy() -> dict:
     subprocess.run(
         ["kubectl", "patch", "deployment", DEPLOYMENT, "-n", NAMESPACE,
          "-p", '{"spec":{"template":{"metadata":{"annotations":{"inject-ts":"' +
-               datetime.utcnow().isoformat() + '"}}}}}'],
+               datetime.now(timezone.utc).isoformat() + '"}}}}}'],
         capture_output=True, text=True, timeout=30,
     )
     return {"type": "bad_deploy", "result": "ok" if r1.returncode == 0 else r1.stderr[:200]}
