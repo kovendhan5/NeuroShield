@@ -339,10 +339,10 @@ def execute_healing_action(action_id: int, context: Dict[str, str]) -> bool:
     Actions:
         0 \u2014 restart_pod:       kubectl rollout restart deployment/dummy-app
         1 \u2014 scale_up:          kubectl scale deployment --replicas=3
-        2 â€” retry_build:       POST Jenkins API to trigger new build
-        3 â€” rollback_deploy:   kubectl rollout undo deployment/dummy-app
-        4 â€” clear_cache:       Call dummy-app /stress to refresh, or restart pod
-        5 â€” escalate_to_human: Write detailed report to data/escalation_reports/
+        2 -- retry_build:       POST Jenkins API to trigger new build
+        3 -- rollback_deploy:   kubectl rollout undo deployment/dummy-app
+        4 -- clear_cache:       Call dummy-app /stress to refresh, or restart pod
+        5 -- escalate_to_human: Write detailed report to data/escalation_reports/
     """
     start_ms = time.time() * 1000.0
     success = False
@@ -352,7 +352,7 @@ def execute_healing_action(action_id: int, context: Dict[str, str]) -> bool:
         service = context.get("affected_service", _affected_service())
 
         if action_id == 0:  # restart_pod
-            logging.info("[ACTION] restart_pod â€” %s in %s", service, namespace)
+            logging.info("[ACTION] restart_pod -- %s in %s", service, namespace)
             cmd = ["kubectl", "rollout", "restart", f"deployment/{service}", "-n", namespace]
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
             if result.returncode == 0:
@@ -370,7 +370,7 @@ def execute_healing_action(action_id: int, context: Dict[str, str]) -> bool:
 
         elif action_id == 1:  # scale_up
             replicas = _scale_replicas()
-            logging.info("[ACTION] scale_up â€” %s to %d replicas", service, replicas)
+            logging.info("[ACTION] scale_up -- %s to %d replicas", service, replicas)
             cmd = ["kubectl", "scale", f"deployment/{service}", f"--replicas={replicas}", "-n", namespace]
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
             if result.returncode == 0:
@@ -394,7 +394,7 @@ def execute_healing_action(action_id: int, context: Dict[str, str]) -> bool:
                 detail = result.stderr.strip()[:200]
 
         elif action_id == 2:  # retry_build
-            logging.info("[ACTION] retry_build â€” triggering Jenkins build")
+            logging.info("[ACTION] retry_build -- triggering Jenkins build")
             jenkins_url = _env("JENKINS_URL", "http://localhost:8080")
             job_name = _env("JENKINS_JOB", "neuroshield-app-build")
             username = _env("JENKINS_USERNAME", "admin")
@@ -434,7 +434,7 @@ def execute_healing_action(action_id: int, context: Dict[str, str]) -> bool:
                 detail = f"Jenkins trigger HTTP {r.status_code}"
 
         elif action_id == 3:  # rollback_deploy
-            logging.info("[ACTION] rollback_deploy â€” %s in %s", service, namespace)
+            logging.info("[ACTION] rollback_deploy -- %s in %s", service, namespace)
             undo = subprocess.run(
                 ["kubectl", "rollout", "undo", f"deployment/{service}", "-n", namespace],
                 capture_output=True, text=True, timeout=30,
@@ -462,7 +462,7 @@ def execute_healing_action(action_id: int, context: Dict[str, str]) -> bool:
                 detail = undo.stderr.strip()[:200]
 
         elif action_id == 4:  # clear_cache
-            logging.info("[ACTION] clear_cache â€” restarting %s to free memory", service)
+            logging.info("[ACTION] clear_cache -- restarting %s to free memory", service)
             # Restart pod to clear all in-memory state
             cmd = ["kubectl", "rollout", "restart", f"deployment/{service}", "-n", namespace]
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
@@ -479,7 +479,7 @@ def execute_healing_action(action_id: int, context: Dict[str, str]) -> bool:
                 detail = result.stderr.strip()[:200]
 
         elif action_id == 5:  # escalate_to_human
-            logging.info("[ACTION] escalate_to_human â€” writing escalation report")
+            logging.info("[ACTION] escalate_to_human -- writing escalation report")
             report_dir = Path("data/escalation_reports")
             report_dir.mkdir(parents=True, exist_ok=True)
             ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
@@ -533,7 +533,7 @@ def execute_healing_action(action_id: int, context: Dict[str, str]) -> bool:
     _log_healing_json(action_id, success, duration_ms, detail, context)
 
     if not success:
-        logging.warning("[ACTION] %s FAILED (%s) â€” will retry once", ACTION_NAMES.get(action_id, "?"), detail)
+        logging.warning("[ACTION] %s FAILED (%s) -- will retry once", ACTION_NAMES.get(action_id, "?"), detail)
 
     return success
 
@@ -646,7 +646,7 @@ def _save_telemetry_row(row: Dict[str, str]) -> None:
 
 def _print_banner() -> None:
     print("\n" + "=" * 65)
-    print("  NeuroShield AIOps Orchestrator â€” Live Mode")
+    print("  NeuroShield AIOps Orchestrator -- Live Mode")
     print("=" * 65)
 
 
@@ -696,7 +696,7 @@ def main() -> None:
         print("    [OK] PPO RL policy loaded (52D state â†’ 6 actions)")
     except Exception as exc:
         policy = None
-        print(f"    [!!] PPO policy not found â€” falling back to default action ({exc})")
+        print(f"    [!!] PPO policy not found -- falling back to default action ({exc})")
 
     # Tracking
     cycle_count = 0
@@ -706,7 +706,8 @@ def main() -> None:
     last_healed_build: Optional[int] = None  # dedup: skip if already healed this build
     last_heal_time: float = 0.0  # cooldown: timestamp of last healing action
     HEAL_COOLDOWN_S = 60  # seconds to wait between healing actions
-    failure_detected_time: Optional[float] = None  # MTTR: when current failure was first detected
+    failure_detected_time: Optional[float] = None  # MTTR: when NEW failure first detected
+    prev_build_status: Optional[str] = None  # track state transitions for MTTR
     mttr_measurements: list = []  # MTTR: list of reduction percentages for summary
 
     print(f"\n  Entering monitoring loop (Ctrl+C to stop)...")
@@ -805,9 +806,10 @@ def main() -> None:
             pattern, pattern_action = detect_failure_pattern(log_text)
 
             if failure_prob > 0.5:
-                # Record failure detection time for MTTR measurement
-                if failure_detected_time is None:
+                # Record failure detection time for MTTR — only on NEW failure transition
+                if failure_detected_time is None and prev_build_status != "FAILURE":
                     failure_detected_time = time.time()
+                    logging.info("NEW failure detected — MTTR timer started")
 
                 # Dedup: skip if we already healed this exact build
                 if build_num is not None and build_num == last_healed_build:
@@ -855,14 +857,17 @@ def main() -> None:
                         successful_actions += 1
                         print(f"    Result:   SUCCESS")
 
-                        # MTTR measurement
+                        # MTTR measurement — only log realistic values (5-300s)
                         if failure_detected_time is not None:
                             actual_mttr = time.time() - failure_detected_time
-                            baseline = MTTR_BASELINES.get(action_name, 120.0)
-                            reduction = max(0.0, (baseline - actual_mttr) / baseline * 100)
-                            mttr_measurements.append(reduction)
-                            _log_mttr(pattern or "unknown", action_name, actual_mttr)
-                            print(f"    MTTR:     {actual_mttr:.1f}s (baseline {baseline:.0f}s, {reduction:.1f}% reduction)")
+                            if 5.0 <= actual_mttr <= 300.0:
+                                baseline = MTTR_BASELINES.get(action_name, 120.0)
+                                reduction = max(0.0, (baseline - actual_mttr) / baseline * 100)
+                                mttr_measurements.append(reduction)
+                                _log_mttr(pattern or "unknown", action_name, actual_mttr)
+                                print(f"    MTTR:     {actual_mttr:.1f}s (baseline {baseline:.0f}s, {reduction:.1f}% reduction)")
+                            else:
+                                logging.warning("MTTR %.1fs outside realistic range [5-300] — skipping", actual_mttr)
                             failure_detected_time = None
                     else:
                         print(f"    Result:   FAILED")
@@ -883,8 +888,11 @@ def main() -> None:
                         "app_health": f"{app_health['health_pct']:.0f}",
                     })
             else:
-                print(f"\n  Status: System healthy â€” no intervention needed")
-                failure_detected_time = None  # reset MTTR timer when healthy
+                print(f"\n  Status: System healthy -- no intervention needed")
+                if build_status == "SUCCESS":
+                    failure_detected_time = None  # reset MTTR timer on healthy build
+
+            prev_build_status = build_status
 
             # --- Summary ---
             print(f"\n  Stats: {total_actions} actions taken, {successful_actions} successful")
