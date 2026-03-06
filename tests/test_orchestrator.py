@@ -214,8 +214,9 @@ class TestExecuteHealingAction:
         monkeypatch.setenv("K8S_NAMESPACE", "ns")
         monkeypatch.setenv("AFFECTED_SERVICE", "svc")
 
+    @patch("src.orchestrator.main._ensure_port_forward")
     @patch("src.orchestrator.main.subprocess.run")
-    def test_action_0_restart_pod(self, mock_run):
+    def test_action_0_restart_pod(self, mock_run, _mock_pf):
         """Action 0 = restart_pod: kubectl rollout restart + rollout status."""
         mock_run.return_value = MagicMock(returncode=0)
         ok = execute_healing_action(0, {"build_number": "99"})
@@ -258,8 +259,9 @@ class TestExecuteHealingAction:
         assert ok is True
         assert mock_run.call_count >= 2  # undo + status
 
+    @patch("src.orchestrator.main._ensure_port_forward")
     @patch("src.orchestrator.main.subprocess.run")
-    def test_action_4_clear_cache(self, mock_run):
+    def test_action_4_clear_cache(self, mock_run, _mock_pf):
         """Action 4 = clear_cache: kubectl rollout restart + status."""
         mock_run.return_value = MagicMock(returncode=0)
         ok = execute_healing_action(4, {})
