@@ -1,5 +1,5 @@
-# ═══════════════════════════════════════════════════════════════════════════════
-# NeuroShield — Single-Command Startup Script
+﻿# ═══════════════════════════════════════════════════════════════════════════════
+# NeuroShield -- Single-Command Startup Script
 # Usage: powershell -ExecutionPolicy Bypass -File scripts/start_neuroshield.ps1
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -8,7 +8,7 @@ $ProjectRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Pa
 Set-Location $ProjectRoot
 
 Write-Host ""
-Write-Host "  NeuroShield AIOps Platform — Starting..." -ForegroundColor Cyan
+Write-Host "  NeuroShield AIOps Platform -- Starting..." -ForegroundColor Cyan
 Write-Host ""
 
 # ─── STEP 1: Check prerequisites ─────────────────────────────────────────────
@@ -19,7 +19,7 @@ try {
     docker info *>$null
     Write-Host "  [OK] Docker is running" -ForegroundColor Green
 } catch {
-    Write-Host "  [FAIL] Docker is not running — start Docker Desktop first" -ForegroundColor Red
+    Write-Host "  [FAIL] Docker is not running -- start Docker Desktop first" -ForegroundColor Red
     exit 1
 }
 
@@ -90,7 +90,7 @@ try {
         Write-Host "  [OK] dummy-app responding on :5000" -ForegroundColor Green
     }
 } catch {
-    Write-Host "  [WARN] dummy-app not responding yet — may need a few more seconds" -ForegroundColor Yellow
+    Write-Host "  [WARN] dummy-app not responding yet -- may need a few more seconds" -ForegroundColor Yellow
 }
 
 # ─── STEP 5: Start telemetry collector ────────────────────────────────────────
