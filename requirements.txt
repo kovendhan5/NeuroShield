@@ -1,5 +1,6 @@
 # Telemetry & API Polling
 requests==2.32.4
+psutil==7.0.0
 
 # ML & RL
 torch==2.7.1

@@ -18,10 +18,25 @@ spec:
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 5000
+          env:
+            - name: APP_VERSION
+              value: "v1"
           resources:
             requests:
               cpu: 10m
-              memory: 16Mi
+              memory: 32Mi
             limits:
-              cpu: 50m
-              memory: 64Mi
+              cpu: 200m
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dummy-app
+spec:
+  selector:
+    app: dummy-app
+  ports:
+    - port: 5000
+      targetPort: 5000
+  type: ClusterIP
