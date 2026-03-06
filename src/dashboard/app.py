@@ -124,6 +124,7 @@ st.markdown("""
 TELEMETRY_CSV = os.getenv("TELEMETRY_OUTPUT_PATH", "data/telemetry.csv")
 HEALING_LOG_CSV = "data/healing_log.csv"
 ACTION_HISTORY_CSV = "data/action_history.csv"
+MTTR_LOG_CSV = "data/mttr_log.csv"
 JENKINS_URL = os.getenv("JENKINS_URL", "http://localhost:8080")
 PROMETHEUS_URL = os.getenv("PROMETHEUS_URL", "http://localhost:9090")
 DUMMY_APP_URL = os.getenv("DUMMY_APP_URL", "http://localhost:5000")
@@ -379,6 +380,33 @@ with m4:
         delta="collection duration",
         delta_color="off",
     )
+
+# ──────────────────────────────────────────────────────────────────────────────
+# MTTR Measurement Dashboard
+# ──────────────────────────────────────────────────────────────────────────────
+
+mttr_df = _load_csv(MTTR_LOG_CSV)
+if not mttr_df.empty and "reduction_pct" in mttr_df.columns:
+    st.markdown('<div class="section-header"><h3>⏱ MTTR Performance</h3></div>',
+                unsafe_allow_html=True)
+    mttr_vals = pd.to_numeric(mttr_df["reduction_pct"], errors="coerce").dropna()
+    actual_vals = pd.to_numeric(mttr_df["actual_mttr_s"], errors="coerce").dropna()
+
+    mc1, mc2, mc3 = st.columns(3)
+    with mc1:
+        st.metric("Avg MTTR Reduction", f"{mttr_vals.mean():.1f}%",
+                   delta=f"{len(mttr_vals)} incidents measured", delta_color="off")
+    with mc2:
+        st.metric("Avg Actual MTTR", f"{actual_vals.mean():.1f}s",
+                   delta="automated response", delta_color="off")
+    with mc3:
+        best = mttr_vals.max() if len(mttr_vals) > 0 else 0
+        st.metric("Best Reduction", f"{best:.1f}%", delta="single incident", delta_color="off")
+
+    # Show last 10 incidents
+    recent_mttr = mttr_df.tail(10)[["timestamp", "failure_type", "action",
+                                      "actual_mttr_s", "baseline_mttr_s", "reduction_pct"]]
+    st.dataframe(recent_mttr, use_container_width=True, hide_index=True)
 
 st.markdown("---")
 
