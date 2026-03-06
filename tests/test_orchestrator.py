@@ -214,45 +214,65 @@ class TestExecuteHealingAction:
         monkeypatch.setenv("K8S_NAMESPACE", "ns")
         monkeypatch.setenv("AFFECTED_SERVICE", "svc")
 
-    @patch("src.orchestrator.main.requests.post")
-    def test_action_0_retry_stage(self, mock_post):
-        mock_post.return_value = MagicMock(status_code=201)
+    @patch("src.orchestrator.main.subprocess.run")
+    def test_action_0_restart_pod(self, mock_run):
+        """Action 0 = restart_pod: kubectl rollout restart + rollout status."""
+        mock_run.return_value = MagicMock(returncode=0)
         ok = execute_healing_action(0, {"build_number": "99"})
         assert ok is True
-        mock_post.assert_called_once()
+        assert mock_run.call_count == 2  # restart + status
 
-    @patch("src.orchestrator.main.requests.post")
-    def test_action_1_clean_and_rerun(self, mock_post):
-        mock_post.return_value = MagicMock(status_code=201)
+    @patch("src.orchestrator.main.subprocess.run")
+    def test_action_1_scale_up(self, mock_run):
+        """Action 1 = scale_up: kubectl scale + poll readyReplicas."""
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout="3",
+        )
         ok = execute_healing_action(1, {"build_number": "100"})
         assert ok is True
 
-    def test_action_2_regenerate_config(self):
-        ok = execute_healing_action(2, {"build_number": "101", "failure_pattern": "dep"})
+    @patch("src.orchestrator.main.requests.Session")
+    @patch("src.orchestrator.main.get_latest_build_info")
+    def test_action_2_retry_build(self, mock_build_info, mock_session_cls):
+        """Action 2 = retry_build: POST Jenkins API via session."""
+        # Pre-build info
+        mock_build_info.side_effect = [
+            MagicMock(number=10, result="FAILURE"),   # before trigger
+            MagicMock(number=11, result="SUCCESS"),   # after trigger
+        ]
+        mock_sess = MagicMock()
+        mock_sess.get.return_value = MagicMock(status_code=200, json=lambda: {
+            "crumbRequestField": "Jenkins-Crumb", "crumb": "abc123"
+        })
+        mock_sess.post.return_value = MagicMock(status_code=201)
+        mock_session_cls.return_value = mock_sess
+        ok = execute_healing_action(2, {"build_number": "10", "failure_pattern": "dep"})
         assert ok is True
-        rows = list(csv.DictReader(open(self._tmp / "config_regen_log.csv", encoding="utf-8")))
-        assert len(rows) == 1
 
     @patch("src.orchestrator.main.subprocess.run")
-    def test_action_3_reallocate_resources(self, mock_run):
+    def test_action_3_rollback_deploy(self, mock_run):
+        """Action 3 = rollback_deploy: kubectl rollout undo + status."""
         mock_run.return_value = MagicMock(returncode=0)
         ok = execute_healing_action(3, {})
         assert ok is True
-        mock_run.assert_called_once()
+        assert mock_run.call_count >= 2  # undo + status
 
     @patch("src.orchestrator.main.subprocess.run")
-    def test_action_4_trigger_safe_rollback(self, mock_run):
+    def test_action_4_clear_cache(self, mock_run):
+        """Action 4 = clear_cache: kubectl rollout restart + status."""
         mock_run.return_value = MagicMock(returncode=0)
         ok = execute_healing_action(4, {})
         assert ok is True
-        assert mock_run.call_count == 2  # undo + status
+        assert mock_run.call_count == 2  # restart + status
 
-    def test_action_5_escalate_to_human(self):
+    def test_action_5_escalate_to_human(self, tmp_path, monkeypatch):
+        """Action 5 = escalate_to_human: writes JSON report to data/escalation_reports/."""
+        monkeypatch.chdir(tmp_path)
         ok = execute_healing_action(5, {"failure_prob": "0.9"})
         assert ok is True
-        rows = list(csv.DictReader(open(self._tmp / "escalation_log.csv", encoding="utf-8")))
-        assert len(rows) == 1
-        assert rows[0]["status"] == "PENDING_HUMAN_REVIEW"
+        reports = list((tmp_path / "data" / "escalation_reports").glob("escalation_*.json"))
+        assert len(reports) >= 1
 
 
 # ── ACTION_NAMES ──────────────────────────────────────────────────────────────
@@ -261,5 +281,9 @@ class TestExecuteHealingAction:
 class TestActionNames:
     def test_all_six_present(self):
         assert len(ACTION_NAMES) == 6
-        assert ACTION_NAMES[0] == "retry_stage"
+        assert ACTION_NAMES[0] == "restart_pod"
+        assert ACTION_NAMES[1] == "scale_up"
+        assert ACTION_NAMES[2] == "retry_build"
+        assert ACTION_NAMES[3] == "rollback_deploy"
+        assert ACTION_NAMES[4] == "clear_cache"
         assert ACTION_NAMES[5] == "escalate_to_human"
