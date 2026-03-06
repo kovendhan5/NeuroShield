@@ -758,6 +758,9 @@ def main() -> None:
                 log_text = f"Build {build_num} status {build_status}"
 
             failure_prob = predictor.predict(log_text, telemetry_dict)
+            # Guard against NaN from predictor
+            if failure_prob != failure_prob:  # NaN check
+                failure_prob = 0.5 if _is_failure(build_status) else 0.0
 
             prob_bar = "â–ˆ" * int(failure_prob * 20) + "â–‘" * (20 - int(failure_prob * 20))
             prob_label = "LOW" if failure_prob < 0.3 else "MEDIUM" if failure_prob < 0.6 else "HIGH" if failure_prob < 0.8 else "CRITICAL"
@@ -780,7 +783,7 @@ def main() -> None:
 
             pattern, pattern_action = detect_failure_pattern(log_text)
 
-            if failure_prob > 0.5 or _is_failure(build_status):
+            if failure_prob > 0.3 or _is_failure(build_status):
                 # Record failure detection time for MTTR measurement
                 if failure_detected_time is None:
                     failure_detected_time = time.time()
@@ -799,7 +802,11 @@ def main() -> None:
                     else:
                         action_id = 0  # default to restart_pod
 
-                    if pattern_action is not None and failure_prob > 0.7:
+                    # Override: FAILURE build -> retry_build unless pattern says otherwise
+                    if _is_failure(build_status) and pattern_action is None:
+                        action_id = 2  # retry_build
+
+                    if pattern_action is not None and failure_prob > 0.3:
                         action_id = pattern_action
 
                     action_name = ACTION_NAMES.get(action_id, f"action_{action_id}")
@@ -961,6 +968,8 @@ def run_single_cycle() -> Dict[str, str]:
         "prometheus_pod_count": 0, "prometheus_error_rate": 0,
     }
     failure_prob = predictor.predict(log_text, telemetry_dict)
+    if failure_prob != failure_prob:  # NaN guard
+        failure_prob = 0.5 if _is_failure(build_status) else 0.0
 
     jenkins_data = {"build_duration": build.duration_ms if build else 0, "build_number": build.number if build else 0}
     prometheus_data = {"cpu_avg_5m": 0, "memory_avg_5m": 0}
@@ -971,6 +980,10 @@ def run_single_cycle() -> Dict[str, str]:
         action_id = int(action)
     else:
         action_id = 0
+
+    # Override: FAILURE build -> retry_build
+    if _is_failure(build_status):
+        action_id = 2  # retry_build
 
     action_name = ACTION_NAMES.get(action_id, f"action_{action_id}")
     success = execute_healing_action(action_id, {
