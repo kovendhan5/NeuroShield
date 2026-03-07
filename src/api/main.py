@@ -18,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
 
-from src.api.routers import demo, healing, mttr, prediction, status, telemetry  # noqa: E402
+from src.api.routers import demo, healing, mttr, prediction, report, status, telemetry  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
 
@@ -49,3 +49,4 @@ app.include_router(healing.router)
 app.include_router(prediction.router)
 app.include_router(mttr.router)
 app.include_router(demo.router)
+app.include_router(report.router)

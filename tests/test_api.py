@@ -116,3 +116,24 @@ def test_mttr_response():
     data = r.json()
     assert "avg_reduction_pct" in data
     assert isinstance(data["avg_reduction_pct"], (int, float))
+
+
+# 11. GET /report/summary returns report data or 404
+def test_report_summary():
+    r = client.get("/report/summary")
+    assert r.status_code in (200, 404)
+    data = r.json()
+    if r.status_code == 200:
+        assert "predictor" in data
+        assert "rl_agent" in data
+    else:
+        assert "error" in data
+
+
+# 12. POST /report/generate returns generating status
+def test_report_generate():
+    r = client.post("/report/generate")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["status"] == "generating"
+    assert "estimated_time_seconds" in data
