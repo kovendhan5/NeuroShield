@@ -46,7 +46,7 @@ print("  NEUROSHIELD MODEL PERFORMANCE REPORT")
 print("═" * 50)
 print()
 
-FAILURE_LOGS = [
+FAILURE_LOGS_EASY = [
     "Build step Execute shell marked build as failure\nFinished: FAILURE",
     "ERROR: script returned exit code 1\nFinished: FAILURE",
     "ModuleNotFoundError: No module named 'requests'\nFinished: FAILURE",
@@ -59,7 +59,20 @@ FAILURE_LOGS = [
     "Connection refused: localhost:5432\nFinished: FAILURE",
 ]
 
-SUCCESS_LOGS = [
+FAILURE_LOGS_HARD = [
+    "Test suite completed with 3 assertions failing",
+    "Exit code: 1 after 145 seconds",
+    "Pipeline interrupted at stage 3",
+    "Compilation error in module dependency graph",
+    "Resource limit exceeded during build phase",
+    "Unexpected termination of worker process",
+    "Build agent disconnected mid-execution",
+    "Dependency resolution conflict detected",
+    "Container health check returned non-zero status",
+    "Artifact upload abandoned after retry limit",
+]
+
+SUCCESS_LOGS_EASY = [
     "All tests passed\nFinished: SUCCESS",
     "Build successful\nFinished: SUCCESS",
     "Deployment complete\nFinished: SUCCESS",
@@ -67,13 +80,36 @@ SUCCESS_LOGS = [
     "Successfully built image\nFinished: SUCCESS",
 ]
 
+SUCCESS_LOGS_HARD = [
+    "All checks completed without issues",
+    "Pipeline executed in 142 seconds",
+    "No errors detected in build phase",
+    "Deployment validated successfully",
+    "Health checks passing on all endpoints",
+    "Stage 3 finished with exit code 0",
+    "Worker process completed normally",
+    "Dependency graph resolved in 12 seconds",
+    "Container started and responding",
+    "Artifact upload finished successfully",
+]
+
 test_logs: list[str] = []
 test_labels: list[int] = []
-for i in range(100):
-    test_logs.append(FAILURE_LOGS[i % len(FAILURE_LOGS)])
+# 50 easy failures (obvious keywords)
+for i in range(50):
+    test_logs.append(FAILURE_LOGS_EASY[i % len(FAILURE_LOGS_EASY)])
     test_labels.append(1)
-for i in range(100):
-    test_logs.append(SUCCESS_LOGS[i % len(SUCCESS_LOGS)])
+# 50 hard failures (semantic only — no obvious keywords)
+for i in range(50):
+    test_logs.append(FAILURE_LOGS_HARD[i % len(FAILURE_LOGS_HARD)])
+    test_labels.append(1)
+# 50 easy successes
+for i in range(50):
+    test_logs.append(SUCCESS_LOGS_EASY[i % len(SUCCESS_LOGS_EASY)])
+    test_labels.append(0)
+# 50 hard successes (ambiguous wording)
+for i in range(50):
+    test_logs.append(SUCCESS_LOGS_HARD[i % len(SUCCESS_LOGS_HARD)])
     test_labels.append(0)
 
 test_telemetry_failure = {
@@ -145,18 +181,67 @@ predictor_results = {
 ns_cm = confusion_matrix(test_labels, neuroshield_preds)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SECTION 2 — RL AGENT EVALUATION
+# SECTION 2 — RL AGENT EVALUATION (real data + simulated baselines)
 # ══════════════════════════════════════════════════════════════════════════════
 
-print("Evaluating RL agent (100 episodes × 4 policies)...")
+print("Evaluating RL agent (real data + simulated baselines)...")
+
+import pandas as pd
+from collections import Counter
 
 from stable_baselines3 import PPO as SB3_PPO
 
 from src.rl_agent.env import NeuroShieldEnv
 from src.rl_agent.simulator import OPTIMAL_ACTION
 
+# --- Real NeuroShield PPO metrics from live infrastructure ---
+healing_records: list[dict] = []
+_heal_path = Path("data/healing_log.json")
+if _heal_path.exists():
+    for _line in _heal_path.read_text(encoding="utf-8").split("\n"):
+        _line = _line.strip()
+        if not _line:
+            continue
+        try:
+            healing_records.append(json.loads(_line))
+        except json.JSONDecodeError:
+            pass
+
+mttr_df = pd.DataFrame()
+_mttr_path = Path("data/mttr_log.csv")
+if _mttr_path.exists() and _mttr_path.stat().st_size > 10:
+    mttr_df = pd.read_csv(_mttr_path)
+
+# Calculate real PPO metrics
+_real_actions = [r.get("action_name", "") for r in healing_records
+                 if r.get("action_name")]
+_real_successes = [r for r in healing_records if r.get("success") is True]
+_real_success_rate = (
+    round(len(_real_successes) / max(len(_real_actions), 1) * 100, 1)
+)
+_real_mttr_reduction = (
+    round(float(mttr_df["reduction_pct"].mean()), 1)
+    if len(mttr_df) > 0 else 0.0
+)
+_action_counts = Counter(_real_actions)
+_real_escalation_rate = round(
+    _action_counts.get("escalate_to_human", 0) / max(len(_real_actions), 1) * 100, 1
+)
+
+ppo_results = {
+    "avg_reward": "N/A",
+    "avg_mttr_reduction": _real_mttr_reduction,
+    "correct_action_rate": _real_success_rate,
+    "avg_escalations_per_ep": _real_escalation_rate,
+    "total_actions": len(_real_actions),
+    "source": "live",
+}
+print(f"  NeuroShield (real): MTTR={_real_mttr_reduction}%, "
+      f"success={_real_success_rate}%, "
+      f"from {len(_real_actions)} live actions")
+
+# --- Simulated baselines ---
 env = NeuroShieldEnv(max_steps=20)
-ppo_model = SB3_PPO.load("models/ppo_policy.zip", env=env)
 
 N_EPISODES = 100
 
@@ -206,19 +291,15 @@ def evaluate_policy(policy_fn, n_episodes: int = N_EPISODES) -> dict:
         "avg_mttr_reduction": round(float(np.mean(mttr_reductions)) * 100, 1),
         "correct_action_rate": round(float(np.mean(correct_actions)) * 100, 1),
         "avg_escalations_per_ep": round(float(np.mean(escalations)), 1),
+        "source": "simulated",
     }
 
 
-ppo_results = evaluate_policy(
-    lambda obs: ppo_model.predict(obs, deterministic=True)[0]
-)
-print("  PPO done")
-
 random_rl = evaluate_policy(lambda obs: env.action_space.sample())
-print("  Random done")
+print("  Random (sim) done")
 
 always_esc = evaluate_policy(lambda obs: 5)
-print("  Always-escalate done")
+print("  Always-escalate (sim) done")
 
 
 def rule_based(obs):
@@ -228,13 +309,13 @@ def rule_based(obs):
 
 
 rule_results = evaluate_policy(rule_based)
-print("  Rule-based done")
+print("  Rule-based (sim) done")
 
 rl_results = {
-    "NeuroShield PPO Agent": ppo_results,
-    "Random Action": random_rl,
-    "Always-Escalate": always_esc,
-    "Rule-Based": rule_results,
+    "NeuroShield PPO (real)": ppo_results,
+    "Random Action (sim)": random_rl,
+    "Always-Escalate (sim)": always_esc,
+    "Rule-Based (sim)": rule_results,
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -310,9 +391,8 @@ for model_name, metrics in predictor_results.items():
 # Build RL table
 rl_metrics_list = [
     ("avg_mttr_reduction", "MTTR Reduction (%)", True),
-    ("avg_reward", "Avg Reward", True),
-    ("correct_action_rate", "Correct Action (%)", True),
-    ("avg_escalations_per_ep", "Escalations/Episode", False),
+    ("correct_action_rate", "Success / Correct (%)", True),
+    ("avg_escalations_per_ep", "Escalation Rate (%)", False),
 ]
 rl_best_map = {m: _best(rl_results, m, hib) for m, _, hib in rl_metrics_list}
 
@@ -321,12 +401,16 @@ for model_name, metrics in rl_results.items():
     is_ns = "NeuroShield" in model_name
     bg = "background:#1e293b;" if is_ns else ""
     row = f'<tr style="{bg}">'
-    row += f'<td style="font-weight:600;white-space:nowrap;">{model_name}</td>'
+    src_tag = " *" if metrics.get("source") == "live" else ""
+    row += f'<td style="font-weight:600;white-space:nowrap;">{model_name}{src_tag}</td>'
     for m, _, _ in rl_metrics_list:
-        suffix = "%" if "reduction" in m or "rate" in m else ""
         val = metrics[m]
-        display = f"{val}{suffix}"
-        row += _rl_cell(display, model_name, rl_best_map[m])
+        if val == "N/A":
+            row += '<td style="color:#888">N/A</td>'
+        else:
+            suffix = "%"
+            display = f"{val}{suffix}"
+            row += _rl_cell(display, model_name, rl_best_map[m])
     row += "</tr>"
     rl_rows += row
 
@@ -380,19 +464,19 @@ cm_html = f"""
 
 # Executive summary
 ns_pred = predictor_results["NeuroShield (DistilBERT + PPO)"]
-ns_rl = rl_results["NeuroShield PPO Agent"]
+ns_rl = rl_results["NeuroShield PPO (real)"]
 exec_summary = f"""
 <p>NeuroShield was evaluated against three baseline approaches on <strong>200 test
-samples</strong> (failure prediction) and <strong>{N_EPISODES} episodes</strong>
+samples</strong> (failure prediction) and <strong>real infrastructure data</strong>
 (RL-based healing). Key results:</p>
 <ul>
 <li><strong>Failure Predictor:</strong> F1 = {ns_pred['f1']}%, AUC = {ns_pred['auc']}%
     — outperforming keyword matching ({predictor_results['Keyword Matching']['f1']}%)
     and random ({predictor_results['Random Classifier']['f1']}%) baselines.</li>
 <li><strong>RL Agent:</strong> Average MTTR reduction of {ns_rl['avg_mttr_reduction']}%
-    with correct action rate of {ns_rl['correct_action_rate']}%,
-    compared to {rl_results['Random Action']['avg_mttr_reduction']}% for random
-    and {rl_results['Rule-Based']['avg_mttr_reduction']}% for rule-based.</li>
+    measured on live infrastructure ({ns_rl['total_actions']} healing actions),
+    compared to {rl_results['Random Action (sim)']['avg_mttr_reduction']}% for random
+    and {rl_results['Rule-Based (sim)']['avg_mttr_reduction']}% for rule-based (simulated).</li>
 <li><strong>Inference speed:</strong> 200 predictions in {round(neuroshield_time, 1)}s
     ({round(neuroshield_time / 200 * 1000, 1)} ms/sample).</li>
 </ul>
@@ -467,7 +551,8 @@ html = f"""<!DOCTYPE html>
 {exec_summary}
 
 <h2>1. Failure Predictor Comparison</h2>
-<p>200 test samples (100 FAILURE + 100 SUCCESS) evaluated against 4 approaches.
+<p>200 test samples (50 easy + 50 hard FAILURE, 50 easy + 50 hard SUCCESS) evaluated against 4 approaches.
+Hard samples use semantic failure descriptions without obvious keywords.
 Best value per metric highlighted in <span style="color:#22c55e;font-weight:700">green</span>.</p>
 
 <table>
@@ -484,16 +569,21 @@ Best value per metric highlighted in <span style="color:#22c55e;font-weight:700"
 {cm_html}
 
 <h2>2. RL Agent Comparison</h2>
-<p>{N_EPISODES} episodes with 20 steps each. Four policies evaluated.
+<p>NeuroShield PPO results measured on real infrastructure ({ns_rl['total_actions']} healing actions).
+Baseline policies evaluated in {N_EPISODES}-episode simulation.
 Best value per metric highlighted in <span style="color:#22c55e;font-weight:700">green</span>.</p>
 
 <table>
 <tr>
-  <th>Policy</th><th>MTTR Reduction (%)</th><th>Avg Reward</th>
-  <th>Correct Action (%)</th><th>Escalations/Ep</th>
+  <th>Policy</th><th>MTTR Reduction (%)</th>
+  <th>Success / Correct (%)</th><th>Escalation Rate (%)</th>
 </tr>
 {rl_rows}
 </table>
+
+<p style="color:#94a3b8;font-size:0.85rem;margin-top:4px">
+* NeuroShield results measured on real infrastructure.
+Baseline results from {N_EPISODES}-episode simulation.</p>
 
 <div class="chart-container">{rl_mttr_svg}</div>
 
@@ -514,12 +604,12 @@ Best value per metric highlighted in <span style="color:#22c55e;font-weight:700"
 <h3>RL-Based Healing</h3>
 <ul>
 <li>The PPO agent achieves <strong>{ns_rl['avg_mttr_reduction']}% MTTR reduction</strong>
-    with a correct action rate of {ns_rl['correct_action_rate']}%.</li>
-<li>Random action selection yields {rl_results['Random Action']['avg_mttr_reduction']}%
-    MTTR reduction — proving that intelligent action selection matters.</li>
-<li>The always-escalate policy ({rl_results['Always-Escalate']['avg_mttr_reduction']}%
+    measured on real infrastructure across {ns_rl['total_actions']} healing actions.</li>
+<li>Random action selection yields {rl_results['Random Action (sim)']['avg_mttr_reduction']}%
+    MTTR reduction in simulation — proving that intelligent action selection matters.</li>
+<li>The always-escalate policy ({rl_results['Always-Escalate (sim)']['avg_mttr_reduction']}%
     reduction) shows that deferring to humans is suboptimal for routine failures.</li>
-<li>The rule-based approach ({rl_results['Rule-Based']['avg_mttr_reduction']}% reduction)
+<li>The rule-based approach ({rl_results['Rule-Based (sim)']['avg_mttr_reduction']}% reduction)
     performs better than random but lacks the adaptability of RL.</li>
 </ul>
 
@@ -534,7 +624,7 @@ Best value per metric highlighted in <span style="color:#22c55e;font-weight:700"
 
 <div class="footer">
   NeuroShield AIOps Platform &mdash; Model Performance Report<br>
-  Generated {gen_time} &bull; 200 prediction samples &bull; {N_EPISODES} RL episodes
+  Generated {gen_time} &bull; 200 prediction samples &bull; {ns_rl['total_actions']} real healing actions + {N_EPISODES} simulated episodes
 </div>
 
 </div>
@@ -564,15 +654,15 @@ print(f"  Keyword Matching: F1={kw_p['f1']}%")
 print(f"  Random:           F1={rn_p['f1']}%")
 print(f"  Always-Failure:   F1={af_p['f1']}%")
 print()
-ppo_r = rl_results["NeuroShield PPO Agent"]
-rnd_r = rl_results["Random Action"]
-esc_r = rl_results["Always-Escalate"]
-rul_r = rl_results["Rule-Based"]
-print(f"RL Agent ({N_EPISODES} episodes):")
-print(f"  PPO Agent:        MTTR={ppo_r['avg_mttr_reduction']}% | Reward={ppo_r['avg_reward']}")
-print(f"  Random:           MTTR={rnd_r['avg_mttr_reduction']}% | Reward={rnd_r['avg_reward']}")
-print(f"  Always-Escalate:  MTTR={esc_r['avg_mttr_reduction']}% | Reward={esc_r['avg_reward']}")
-print(f"  Rule-Based:       MTTR={rul_r['avg_mttr_reduction']}% | Reward={rul_r['avg_reward']}")
+ppo_r = rl_results["NeuroShield PPO (real)"]
+rnd_r = rl_results["Random Action (sim)"]
+esc_r = rl_results["Always-Escalate (sim)"]
+rul_r = rl_results["Rule-Based (sim)"]
+print(f"RL Healing ({ppo_r['total_actions']} real actions + {N_EPISODES} sim episodes):")
+print(f"  PPO (real):       MTTR={ppo_r['avg_mttr_reduction']}% | Success={ppo_r['correct_action_rate']}%")
+print(f"  Random (sim):     MTTR={rnd_r['avg_mttr_reduction']}% | Correct={rnd_r['correct_action_rate']}%")
+print(f"  Escalate (sim):   MTTR={esc_r['avg_mttr_reduction']}% | Correct={esc_r['correct_action_rate']}%")
+print(f"  Rule-Based (sim): MTTR={rul_r['avg_mttr_reduction']}% | Correct={rul_r['correct_action_rate']}%")
 print()
 print(f"Report saved: data/model_report.html")
 print(f"Summary JSON: data/model_report_summary.json")
