@@ -26,7 +26,7 @@ def _safe_float(val: Any, default: float = 0.0) -> float:
 def _load_telemetry() -> pd.DataFrame:
     if not TELEMETRY_CSV.exists():
         return pd.DataFrame()
-    df = pd.read_csv(TELEMETRY_CSV)
+    df = pd.read_csv(TELEMETRY_CSV, encoding="utf-8", encoding_errors="replace", on_bad_lines="skip")
     return df
 
 

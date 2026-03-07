@@ -74,7 +74,7 @@ def metrics():
             build_status="UNKNOWN", pod_count=0, total_telemetry_rows=0,
         )
 
-    df = pd.read_csv(TELEMETRY_CSV)
+    df = pd.read_csv(TELEMETRY_CSV, encoding="utf-8", encoding_errors="replace", on_bad_lines="skip")
     if df.empty:
         return MetricsResponse(
             timestamp=datetime.now(timezone.utc).isoformat(),
