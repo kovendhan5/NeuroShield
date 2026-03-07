@@ -450,6 +450,24 @@ st.sidebar.markdown("[API Docs (Swagger)](http://localhost:8502/docs)")
 st.sidebar.markdown("[Health Check](http://localhost:8502/health)")
 st.sidebar.markdown("[Live Metrics](http://localhost:8502/metrics)")
 
+# Model report
+st.sidebar.markdown("---")
+st.sidebar.markdown("### \U0001f4ca Model Report")
+_report_path = Path("data/model_report.html")
+if _report_path.exists():
+    _mod_time = datetime.fromtimestamp(_report_path.stat().st_mtime)
+    st.sidebar.success(f"Report generated\n{_mod_time.strftime('%Y-%m-%d %H:%M')}")
+    if st.sidebar.button("\U0001f504 Regenerate Report"):
+        import subprocess as _sp
+        _sp.Popen([sys.executable, "scripts/generate_model_report.py"])
+        st.sidebar.info("Generating... (~30 seconds)")
+else:
+    st.sidebar.warning("No report yet")
+    if st.sidebar.button("\U0001f4ca Generate Report"):
+        import subprocess as _sp
+        _sp.Popen([sys.executable, "scripts/generate_model_report.py"])
+        st.sidebar.info("Generating... (~30 seconds)")
+
 # Notification configuration status
 st.sidebar.markdown("---")
 st.sidebar.markdown("### \U0001f514 Notifications")
