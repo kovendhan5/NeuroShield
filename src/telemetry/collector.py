@@ -35,6 +35,8 @@ class TelemetryData:
     prometheus_memory_usage: Optional[float] = None
     prometheus_pod_count: Optional[int] = None
     prometheus_error_rate: Optional[float] = None
+    self_ci_status: Optional[str] = None
+    self_ci_duration: Optional[float] = None
 
 
 class JenkinsPoll:
@@ -263,7 +265,8 @@ class TelemetryCollector:
         jenkins_job: str = "default-job",
         username: str = None,
         token: str = None,
-        log_capture: bool = False
+        log_capture: bool = False,
+        self_ci_job: str = "",
     ):
         """
         Initialize telemetry collector.
@@ -276,6 +279,7 @@ class TelemetryCollector:
             jenkins_job: Jenkins job name to monitor
             username: Jenkins username (optional)
             token: Jenkins API token (optional)
+            self_ci_job: NeuroShield self-CI job name (optional)
         """
         self.jenkins = JenkinsPoll(jenkins_url, username, token)
         self.prometheus = PrometheusPoll(prometheus_url)
@@ -284,6 +288,7 @@ class TelemetryCollector:
         self.jenkins_job = jenkins_job
         self.running = False
         self.log_capture = log_capture
+        self.self_ci_job = self_ci_job
         
         # Initialize CSV with headers
         self._init_csv()
@@ -336,6 +341,15 @@ class TelemetryCollector:
                 memory_usage = _psutil.virtual_memory().percent
             except Exception:
                 memory_usage = 0.0  # absolute last resort — never NaN
+
+        # Fetch self-CI job status (NeuroShield monitors its own pipeline)
+        self_ci_status = None
+        self_ci_duration = None
+        if self.self_ci_job:
+            self_ci_build = self.jenkins.get_last_build_status(self.self_ci_job)
+            if self_ci_build:
+                self_ci_status = self_ci_build.get("status")
+                self_ci_duration = self_ci_build.get("duration_ms")
         
         telemetry = TelemetryData(
             timestamp=timestamp,
@@ -346,7 +360,9 @@ class TelemetryCollector:
             prometheus_cpu_usage=cpu_usage,
             prometheus_memory_usage=memory_usage,
             prometheus_pod_count=pod_count,
-            prometheus_error_rate=error_rate
+            prometheus_error_rate=error_rate,
+            self_ci_status=self_ci_status,
+            self_ci_duration=self_ci_duration,
         )
         
         logger.debug(f"Collected telemetry: {telemetry}")

@@ -285,6 +285,27 @@ with st.sidebar:
     st.markdown(f"- PCA Encoder: {'✅ Loaded' if pca_ok else '❌ Missing'}")
 
     st.markdown("---")
+    st.markdown("### 🔄 Self-CI Status")
+    _self_ci_path = Path("data/self_ci_status.json")
+    if _self_ci_path.exists():
+        try:
+            _sci = json.loads(_self_ci_path.read_text(encoding="utf-8"))
+            _sci_result = _sci.get("result", "UNKNOWN")
+            _sci_num = _sci.get("build_number", "?")
+            _sci_ts = str(_sci.get("timestamp", ""))[:19]
+            if _sci_result == "SUCCESS":
+                st.markdown(f"✅ Build #{_sci_num}: **{_sci_result}**")
+            else:
+                st.markdown(f"❌ Build #{_sci_num}: **{_sci_result}**")
+                if _sci.get("reason"):
+                    st.caption(_sci["reason"])
+            st.caption(f"Last: {_sci_ts}")
+        except Exception:
+            st.markdown("⚠️ Status file unreadable")
+    else:
+        st.markdown("⏳ No self-CI builds yet")
+
+    st.markdown("---")
     st.markdown("### ⚡ Quick Actions")
 
     if st.button("🔴 Trigger Test Failure", use_container_width=True):
@@ -1109,6 +1130,38 @@ with col_a3:
     - Escalation to human review
     - Full audit logging of all decisions
     """)
+
+st.markdown("---")
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Self-CI Pipeline History
+# ──────────────────────────────────────────────────────────────────────────────
+
+st.markdown('<div class="section-header"><h3>🔄 NeuroShield Self-CI History</h3></div>',
+            unsafe_allow_html=True)
+
+_self_ci_path_main = Path("data/self_ci_status.json")
+if _self_ci_path_main.exists():
+    try:
+        _sci_data = json.loads(_self_ci_path_main.read_text(encoding="utf-8"))
+        _sci_cols = st.columns(4)
+        with _sci_cols[0]:
+            st.metric("Build #", _sci_data.get("build_number", "—"))
+        with _sci_cols[1]:
+            _sci_res = _sci_data.get("result", "UNKNOWN")
+            st.metric("Result", _sci_res)
+        with _sci_cols[2]:
+            _sci_dur = _sci_data.get("duration_ms", 0)
+            st.metric("Duration", f"{_sci_dur / 1000:.1f}s" if _sci_dur else "—")
+        with _sci_cols[3]:
+            _sci_active = _sci_data.get("active", False)
+            st.metric("Alert", "🚨 ACTIVE" if _sci_active else "✅ Clear")
+        if _sci_data.get("reason"):
+            st.caption(f"Last status: {_sci_data['reason']}")
+    except Exception:
+        st.info("⚠️ Could not read self-CI status file")
+else:
+    st.info("⏳ No self-CI data yet. Run: `python scripts/setup_neuroshield_cicd.py`")
 
 st.markdown("---")
 
