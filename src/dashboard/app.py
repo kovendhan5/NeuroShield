@@ -520,35 +520,8 @@ with chart_col:
                 unsafe_allow_html=True)
 
     if not df_recent.empty and "failure_prob" in df_recent.columns:
-        prob_col = df_recent["failure_prob"]
-        x_vals = list(range(len(df_recent)))
-
-        try:
-            fig_line = go.Figure()
-            fig_line.add_trace(go.Scatter(
-                x=x_vals, y=prob_col.tolist(),
-                mode="lines+markers",
-                name="Failure Probability",
-                line=dict(color="#ef4444", width=2),
-                marker=dict(size=4),
-                fill="tozeroy",
-                fillcolor="rgba(239,68,68,0.1)",
-            ))
-            fig_line.add_hline(y=0.5, line_dash="dash", line_color="#f59e0b",
-                               annotation_text="Healing Threshold (0.5)")
-            fig_line.update_layout(
-                yaxis=dict(title="Probability", range=[0, 1]),
-                xaxis=dict(title="Last 50 readings →"),
-                height=250,
-                margin=dict(l=0, r=0, t=10, b=0),
-                paper_bgcolor="rgba(0,0,0,0)",
-                plot_bgcolor="rgba(20,20,20,0.5)",
-                font=dict(color="#ffffff"),
-                showlegend=False,
-            )
-            st.plotly_chart(fig_line, use_container_width=True)
-        except Exception:
-            st.line_chart(df_recent[["failure_prob"]])
+        chart_df = df_recent[["failure_prob"]].reset_index(drop=True)
+        st.line_chart(chart_df, y="failure_prob", height=250)
     else:
         st.info("📡 Waiting for telemetry data... Start the telemetry collector: "
                 "`python src/telemetry/main.py`")
@@ -558,11 +531,6 @@ with pie_col:
                 unsafe_allow_html=True)
 
     # Build action counts from healing_log.json
-    _pie_colors = {
-        "restart_pod": "#ff6600", "scale_up": "#0099ff",
-        "retry_build": "#00cc44", "rollback_deploy": "#ff0044",
-        "clear_cache": "#ffcc00", "escalate_to_human": "#9944ff",
-    }
     _healing_actions: list[str] = []
     _hlj_path = Path("data/healing_log.json")
     if _hlj_path.exists():
@@ -578,30 +546,7 @@ with pie_col:
     if _healing_actions:
         from collections import Counter as _Ctr
         _ac = _Ctr(_healing_actions)
-        _labels = list(_ac.keys())
-        _values = list(_ac.values())
-        _colors_pie = [_pie_colors.get(l, "#888888") for l in _labels]
-
-        try:
-            fig_pie = go.Figure(go.Pie(
-                labels=_labels,
-                values=_values,
-                marker=dict(colors=_colors_pie),
-                hole=0.4,
-                textinfo="label+percent",
-                textfont=dict(size=11, color="#e2e8f0"),
-            ))
-            fig_pie.update_layout(
-                height=250,
-                margin=dict(l=0, r=0, t=10, b=0),
-                paper_bgcolor="rgba(0,0,0,0)",
-                font=dict(color="#ffffff"),
-                showlegend=True,
-                legend=dict(font=dict(color="white", size=11)),
-            )
-            st.plotly_chart(fig_pie, use_container_width=True)
-        except Exception:
-            st.bar_chart(pd.Series(_ac))
+        st.bar_chart(pd.Series(_ac, name="count"), height=250)
     else:
         _placeholder = {"retry_build": 68, "restart_pod": 30, "scale_up": 2,
                         "clear_cache": 10, "rollback_deploy": 5, "escalate_to_human": 15}
@@ -964,45 +909,28 @@ st.markdown('<div class="section-header"><h3>🔧 Recent Healing Decisions</h3><
 _heal_rows: list[dict] = []
 _heal_json_path = Path("data/healing_log.json")
 if _heal_json_path.exists():
-    for _hl_line in _heal_json_path.read_text(encoding="utf-8").strip().splitlines():
-        try:
-            _hr = json.loads(_hl_line)
-            _hctx = _hr.get("context", {})
-            _action = _hr.get("action_name", "")
-            _prob = float(_hctx.get("failure_prob", 0))
-
-            # Build telemetry snapshot for explain_decision
-            _tel_snap = {
-                "jenkins_last_build_status": _hctx.get("jenkins_last_build_status", ""),
-                "prometheus_cpu_usage": float(_hctx.get("prometheus_cpu_usage", 0) or 0),
-                "prometheus_memory_usage": float(_hctx.get("prometheus_memory_usage", 0) or 0),
-                "pod_restart_count": 0,
-                "prometheus_error_rate": 0,
-            }
+    _raw = _heal_json_path.read_text(encoding="utf-8").strip()
+    if _raw:
+        for _hl_line in _raw.splitlines():
             try:
-                _expl = explain_decision(_tel_snap, _action, _prob)
-                _reasons_str = "; ".join(_expl["reasons"])
-                _confidence = _expl["confidence"]
+                _hr = json.loads(_hl_line)
+                _hctx = _hr.get("context", {})
+                _prob = _hctx.get("failure_prob", "")
+                _conf = f"{float(_prob):.1%}" if _prob else "—"
+                _heal_rows.append({
+                    "Time": str(_hr.get("timestamp", ""))[:19],
+                    "Action": _hr.get("action_name", ""),
+                    "Result": "✅" if _hr.get("success") else "❌",
+                    "Confidence": _conf,
+                })
             except Exception:
-                _reasons_str = ""
-                _confidence = f"{_prob:.1%}"
-
-            _heal_rows.append({
-                "Time": str(_hr.get("timestamp", ""))[:19],
-                "Action": _action,
-                "Result": "✅" if _hr.get("success") else "❌",
-                "Confidence": _confidence,
-                "Pattern": _hctx.get("failure_pattern", ""),
-                "Reasons": _reasons_str,
-            })
-        except Exception:
-            pass
+                pass
 
 if _heal_rows:
-    _heal_display_df = pd.DataFrame(_heal_rows[-20:][::-1])
+    _heal_display_df = pd.DataFrame(_heal_rows[-10:])
     st.dataframe(_heal_display_df, use_container_width=True, hide_index=True)
 else:
-    st.info("No healing actions yet — trigger a failure to see decisions")
+    st.info("No healing actions yet")
 
 st.markdown("---")
 
