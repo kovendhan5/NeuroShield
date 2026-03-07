@@ -443,6 +443,23 @@ if not telemetry_df.empty:
     if not df_recent.empty and "failure_prob" in df_recent.columns:
         st.sidebar.write("Last prob:", f"{df_recent['failure_prob'].iloc[-1]:.4f}")
 
+# Email configuration status
+st.sidebar.markdown("---")
+_email_from = os.getenv("ALERT_EMAIL_FROM", "")
+_email_to = os.getenv("ALERT_EMAIL_TO", "")
+_email_pass = os.getenv("ALERT_EMAIL_PASSWORD", "")
+if all([_email_from, _email_to, _email_pass]):
+    st.sidebar.success(f"📧 Email alerts → {_email_to}")
+else:
+    _missing = []
+    if not _email_from:
+        _missing.append("ALERT_EMAIL_FROM")
+    if not _email_to:
+        _missing.append("ALERT_EMAIL_TO")
+    if not _email_pass:
+        _missing.append("ALERT_EMAIL_PASSWORD")
+    st.sidebar.warning(f"📧 Email not configured\nMissing: {', '.join(_missing)}")
+
 # ──────────────────────────────────────────────────────────────────────────────
 # FIX 8 — METRICS FROM REAL DATA
 # ──────────────────────────────────────────────────────────────────────────────
@@ -757,10 +774,10 @@ with adv_col2:
 
 with adv_col3:
     if st.button("🚨 Escalate to Human", use_container_width=True,
-                 help="Directly triggers escalation: shows desktop notification, writes alert banner."):
+                 help="Directly triggers escalation: sends email alert, writes alert banner."):
         try:
             from src.utils.notifications import (
-                send_desktop_notification, write_active_alert
+                send_escalation_alert, write_active_alert
             )
             from src.orchestrator.main import generate_incident_report
             _ctx = {
@@ -778,9 +795,10 @@ with adv_col3:
                 severity="HIGH",
                 details=_ctx,
             )
-            send_desktop_notification(
-                "NeuroShield: Escalation Demo",
-                "Human Intervention Required — see dashboard",
+            send_escalation_alert(
+                reason="Dashboard-triggered escalation demo",
+                report_path="data/escalation_reports/",
+                telemetry=_ctx,
             )
             _rid, _rpath = generate_incident_report(
                 _ctx, "escalate_to_human", "Dashboard-triggered escalation demo"

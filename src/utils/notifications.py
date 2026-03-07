@@ -1,6 +1,7 @@
 """NeuroShield Notification Utilities.
 
-Provides desktop notifications, email alerts, and dashboard alert banner writing.
+Provides email alerts and dashboard alert banner writing.
+Desktop notifications are disabled — email is more reliable and professional.
 All methods fail gracefully when dependencies or configuration are missing.
 """
 
@@ -19,103 +20,237 @@ from typing import Any, Dict, Optional
 logger = logging.getLogger(__name__)
 
 
-def send_desktop_notification(title: str, message: str) -> bool:
-    """Send a Windows desktop toast notification.
-
-    Tries plyer first, falls back to PowerShell WinRT toast.
-    Returns True if notification was attempted successfully.
-    """
-    # Try plyer first
-    try:
-        from plyer import notification as _notif  # type: ignore
-        _notif.notify(
-            title=title,
-            message=message,
-            app_icon=None,
-            timeout=10,
-        )
-        logger.info("[NOTIFY] Desktop notification sent via plyer: %s", title)
-        return True
-    except ImportError:
-        pass
-    except Exception as exc:
-        logger.warning("[NOTIFY] plyer notification failed: %s", exc)
-
-    # Fallback: PowerShell WinRT toast (Windows 10/11 only)
-    try:
-        import subprocess
-        # Sanitize strings to avoid PowerShell injection
-        safe_title = title.replace('"', "'").replace("`", "").replace("\n", " ")[:100]
-        safe_msg = message.replace('"', "'").replace("`", "").replace("\n", " ")[:200]
-        ps_cmd = (
-            "[Windows.UI.Notifications.ToastNotificationManager,"
-            "Windows.UI.Notifications,ContentType=WindowsRuntime] > $null; "
-            "$template = [Windows.UI.Notifications.ToastTemplateType]::ToastText02; "
-            "$xml = [Windows.UI.Notifications.ToastNotificationManager]"
-            "::GetTemplateContent($template); "
-            f'$xml.GetElementsByTagName("text")[0].AppendChild($xml.CreateTextNode("{safe_title}")); '
-            f'$xml.GetElementsByTagName("text")[1].AppendChild($xml.CreateTextNode("{safe_msg}")); '
-            "$toast = [Windows.UI.Notifications.ToastNotification]::new($xml); "
-            '[Windows.UI.Notifications.ToastNotificationManager]'
-            '::CreateToastNotifier("NeuroShield").Show($toast);'
-        )
-        subprocess.run(
-            ["powershell", "-Command", ps_cmd],
-            capture_output=True,
-            timeout=10,
-        )
-        logger.info("[NOTIFY] PowerShell toast notification sent: %s", title)
-        return True
-    except Exception as exc:
-        logger.warning("[NOTIFY] PowerShell notification failed: %s", exc)
-        return False
-
-
-def send_email_alert(subject: str, body: str) -> bool:
-    """Send an HTML email alert via Gmail SMTP.
+def send_email_alert(subject: str, body: str,
+                     html_body: str = None) -> bool:
+    """Send an email alert via Gmail SMTP.
 
     Reads credentials from environment variables:
         ALERT_EMAIL_FROM     — sender Gmail address
         ALERT_EMAIL_TO       — recipient address
         ALERT_EMAIL_PASSWORD — Gmail app password (not regular password)
 
-    Returns True if email was sent, False otherwise (missing config, network error, etc.)
+    Returns True if email was sent, False otherwise.
     """
     smtp_user = os.getenv("ALERT_EMAIL_FROM")
     smtp_pass = os.getenv("ALERT_EMAIL_PASSWORD")
     to_email = os.getenv("ALERT_EMAIL_TO")
 
+    # Silent no-op if email not configured
     if not all([smtp_user, smtp_pass, to_email]):
-        logger.debug("[EMAIL] Email not configured (ALERT_EMAIL_FROM/TO/PASSWORD not set)")
+        logger.info(
+            "Email not configured — set ALERT_EMAIL_FROM, "
+            "ALERT_EMAIL_TO, ALERT_EMAIL_PASSWORD in .env")
         return False
 
-    msg = MIMEMultipart()
-    msg["From"] = smtp_user
-    msg["To"] = to_email
-    msg["Subject"] = f"[NeuroShield Alert] {subject}"
-
-    html_body = f"""
-    <html><body>
-    <h2 style="color:red">&#9888; NeuroShield Escalation Alert</h2>
-    <p><b>Time:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
-    <p><b>Issue:</b> {subject}</p>
-    <pre style="background:#f5f5f5; padding:12px; border-radius:4px;">{body}</pre>
-    <hr>
-    <p>View dashboard: <a href="http://localhost:8501">localhost:8501</a></p>
-    </body></html>
-    """
-    msg.attach(MIMEText(html_body, "html"))
-
     try:
-        with smtplib.SMTP("smtp.gmail.com", 587, timeout=10) as server:
+        msg = MIMEMultipart("alternative")
+        msg["From"] = f"NeuroShield AIOps <{smtp_user}>"
+        msg["To"] = to_email
+        msg["Subject"] = f"[NeuroShield] {subject}"
+
+        # Plain text fallback
+        msg.attach(MIMEText(body, "plain"))
+
+        # HTML version if provided
+        if html_body:
+            msg.attach(MIMEText(html_body, "html"))
+
+        with smtplib.SMTP("smtp.gmail.com", 587) as server:
+            server.ehlo()
             server.starttls()
             server.login(smtp_user, smtp_pass)
             server.send_message(msg)
-        logger.info("[EMAIL] Alert sent to %s", to_email)
+
+        logger.info("Email sent to %s: %s", to_email, subject)
         return True
-    except Exception as exc:
-        logger.warning("[EMAIL] Email alert failed: %s", exc)
+
+    except smtplib.SMTPAuthenticationError:
+        logger.error(
+            "Email authentication failed. "
+            "Use Gmail App Password, not your account password. "
+            "Enable at: myaccount.google.com/apppasswords")
         return False
+    except smtplib.SMTPException as e:
+        logger.error("SMTP error: %s", e)
+        return False
+    except Exception as e:
+        logger.error("Email failed: %s", e)
+        return False
+
+
+def send_healing_notification(action: str, reason: str,
+                              result: str,
+                              telemetry: dict) -> bool:
+    """Send an email notification after a healing action completes."""
+    subject = f"Auto-Healed: {action} — {result}"
+
+    cpu = telemetry.get("prometheus_cpu_usage", "N/A")
+    mem = telemetry.get("prometheus_memory_usage", "N/A")
+    build = telemetry.get("jenkins_last_build_status", "N/A")
+
+    plain = (
+        f"NeuroShield executed healing action\n\n"
+        f"Action: {action}\n"
+        f"Reason: {reason}\n"
+        f"Result: {result}\n"
+        f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        f"System State:\n"
+        f"  CPU: {cpu}%\n"
+        f"  Memory: {mem}%\n"
+        f"  Build: {build}\n\n"
+        f"Dashboard: http://localhost:8501"
+    )
+
+    html = f"""
+    <html><body style="font-family:Arial;max-width:600px;margin:auto">
+    <div style="background:#1a1a2e;color:white;padding:20px;
+                border-radius:8px 8px 0 0">
+        <h2 style="margin:0">&#128737; NeuroShield — Auto-Healed</h2>
+    </div>
+    <div style="background:#f9f9f9;padding:20px;
+                border:1px solid #ddd;border-radius:0 0 8px 8px">
+        <table style="width:100%;border-collapse:collapse">
+            <tr>
+                <td style="padding:8px;font-weight:bold;width:30%">
+                    Action</td>
+                <td style="padding:8px;color:#0066cc">{action}</td>
+            </tr>
+            <tr style="background:#fff">
+                <td style="padding:8px;font-weight:bold">Reason</td>
+                <td style="padding:8px">{reason}</td>
+            </tr>
+            <tr>
+                <td style="padding:8px;font-weight:bold">Result</td>
+                <td style="padding:8px;
+                    color:{'green' if 'success' in result.lower()
+                           else 'red'}">{result}</td>
+            </tr>
+            <tr style="background:#fff">
+                <td style="padding:8px;font-weight:bold">Time</td>
+                <td style="padding:8px">
+                    {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+                </td>
+            </tr>
+        </table>
+        <h3>System State</h3>
+        <table style="width:100%;border-collapse:collapse">
+            <tr>
+                <td style="padding:6px;background:#eee;width:33%">
+                    CPU</td>
+                <td style="padding:6px">{cpu}%</td>
+            </tr>
+            <tr>
+                <td style="padding:6px;background:#eee">Memory</td>
+                <td style="padding:6px">{mem}%</td>
+            </tr>
+            <tr>
+                <td style="padding:6px;background:#eee">
+                    Build Status</td>
+                <td style="padding:6px">{build}</td>
+            </tr>
+        </table>
+        <br>
+        <a href="http://localhost:8501"
+           style="background:#1a1a2e;color:white;padding:10px 20px;
+                  text-decoration:none;border-radius:4px">
+            View Dashboard
+        </a>
+    </div>
+    </body></html>
+    """
+    return send_email_alert(subject, plain, html)
+
+
+def send_escalation_alert(reason: str, report_path: str,
+                          telemetry: dict) -> bool:
+    """Send an escalation email when human intervention is required."""
+    subject = "ESCALATION: Human Intervention Required"
+
+    plain = (
+        f"NeuroShield requires human intervention\n\n"
+        f"Reason: {reason}\n"
+        f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        f"Report: {report_path}\n\n"
+        f"NeuroShield could not automatically resolve this issue.\n"
+        f"Please review the incident report and take action.\n\n"
+        f"Dashboard: http://localhost:8501\n"
+        f"Jenkins: http://localhost:8080"
+    )
+
+    cpu = telemetry.get("prometheus_cpu_usage", "N/A")
+    mem = telemetry.get("prometheus_memory_usage", "N/A")
+    build = telemetry.get("jenkins_last_build_status", "N/A")
+
+    html = f"""
+    <html><body style="font-family:Arial;max-width:600px;margin:auto">
+    <div style="background:#cc0000;color:white;padding:20px;
+                border-radius:8px 8px 0 0">
+        <h2 style="margin:0">&#128680; NeuroShield — Escalation Alert</h2>
+        <p style="margin:5px 0 0 0">Human intervention required</p>
+    </div>
+    <div style="background:#fff8f8;padding:20px;
+                border:2px solid #cc0000;
+                border-radius:0 0 8px 8px">
+        <p style="color:#cc0000;font-weight:bold;font-size:16px">
+            &#9888; {reason}
+        </p>
+        <p>NeuroShield attempted automatic remediation but could
+           not resolve this incident. Manual investigation required.
+        </p>
+        <h3>System State at Escalation</h3>
+        <table style="width:100%;border-collapse:collapse">
+            <tr style="background:#f5f5f5">
+                <td style="padding:8px;font-weight:bold">CPU</td>
+                <td style="padding:8px">{cpu}%</td>
+            </tr>
+            <tr>
+                <td style="padding:8px;font-weight:bold">Memory</td>
+                <td style="padding:8px">{mem}%</td>
+            </tr>
+            <tr style="background:#f5f5f5">
+                <td style="padding:8px;font-weight:bold">
+                    Build Status</td>
+                <td style="padding:8px">{build}</td>
+            </tr>
+            <tr>
+                <td style="padding:8px;font-weight:bold">
+                    Report Generated</td>
+                <td style="padding:8px">{report_path}</td>
+            </tr>
+        </table>
+        <br>
+        <a href="http://localhost:8080"
+           style="background:#cc0000;color:white;
+                  padding:10px 20px;text-decoration:none;
+                  border-radius:4px;margin-right:10px">
+            Jenkins Dashboard
+        </a>
+        <a href="http://localhost:8501"
+           style="background:#1a1a2e;color:white;
+                  padding:10px 20px;text-decoration:none;
+                  border-radius:4px">
+            NeuroShield Dashboard
+        </a>
+    </div>
+    </body></html>
+    """
+    return send_email_alert(subject, plain, html)
+
+
+def send_self_ci_failure_alert(build_number: int,
+                               stages_failed: list) -> bool:
+    """Send a critical email when NeuroShield's own CI pipeline fails."""
+    subject = f"CRITICAL: NeuroShield Self-CI Failed (Build #{build_number})"
+
+    plain = (
+        f"NeuroShield's own CI pipeline has failed\n\n"
+        f"Build: #{build_number}\n"
+        f"Failed stages: {', '.join(stages_failed)}\n"
+        f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        f"This means NeuroShield's own tests or models are broken.\n"
+        f"Check: http://localhost:8080/job/neuroshield-ci/\n"
+    )
+    return send_email_alert(subject, plain)
 
 
 def write_active_alert(
@@ -144,3 +279,10 @@ def write_active_alert(
         logger.info("[ALERT] Active alert written to %s", alert_path)
     except Exception as exc:
         logger.warning("[ALERT] Failed to write active alert: %s", exc)
+
+
+# Keep as no-op so existing code doesn't break during transition
+def send_desktop_notification(title: str, message: str) -> bool:
+    """Disabled — use email notifications instead."""
+    logger.debug("Desktop notifications disabled. Use email instead: %s", title)
+    return False

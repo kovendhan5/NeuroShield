@@ -26,7 +26,10 @@ from dotenv import load_dotenv
 from stable_baselines3 import PPO
 
 from src.prediction.predictor import FailurePredictor, build_52d_state
-from src.utils.notifications import send_desktop_notification, send_email_alert, write_active_alert
+from src.utils.notifications import (
+    send_desktop_notification, send_email_alert, write_active_alert,
+    send_healing_notification, send_escalation_alert, send_self_ci_failure_alert,
+)
 from src.utils.intelligence import detect_early_warning, explain_decision
 
 T = TypeVar("T")
@@ -524,8 +527,11 @@ def execute_healing_action(action_id: int, context: Dict[str, str]) -> bool:
                 f"pattern={context.get('failure_pattern', 'unknown')}"
             ))
 
-            send_desktop_notification("NeuroShield: Human Intervention Required", esc_reason)
-            send_email_alert("Human Intervention Required", json.dumps(report, indent=2))
+            send_escalation_alert(
+                reason=esc_reason,
+                report_path=str(report_path),
+                telemetry=context,
+            )
             write_active_alert(
                 title="Human Intervention Required",
                 message=esc_reason,
@@ -897,7 +903,7 @@ def handle_self_ci_failure(build_info: Dict, reason: str = "") -> None:
     """Handle a failure in NeuroShield's own CI pipeline.
 
     Writes a status file (data/self_ci_status.json), logs a critical alert,
-    and sends a desktop notification.
+    and sends an email notification.
     """
     status = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -913,9 +919,9 @@ def handle_self_ci_failure(build_info: Dict, reason: str = "") -> None:
     logging.critical("SELF-CI FAILURE: build #%s → %s",
                      build_info.get("number"), build_info.get("result"))
 
-    send_desktop_notification(
-        "NeuroShield Self-CI FAILURE",
-        status["reason"],
+    send_self_ci_failure_alert(
+        build_number=build_info.get("number"),
+        stages_failed=["self-ci"],
     )
     write_active_alert(
         title="Self-CI Pipeline Failure",
@@ -1177,6 +1183,18 @@ def main() -> None:
                     _write_cooldown_ts()
 
                     total_actions += 1
+                    # Email notification for healing result
+                    send_healing_notification(
+                        action=action_name,
+                        reason=action_reason,
+                        result="SUCCESS" if success else "FAILED",
+                        telemetry={
+                            "prometheus_cpu_usage": f"{prom_metrics['cpu_usage']:.1f}",
+                            "prometheus_memory_usage": f"{prom_metrics['memory_usage']:.1f}",
+                            "jenkins_last_build_status": build_status,
+                        },
+                    )
+
                     if success:
                         successful_actions += 1
                         print(f"    Result:   SUCCESS")
