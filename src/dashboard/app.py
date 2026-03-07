@@ -443,6 +443,13 @@ if not telemetry_df.empty:
     if not df_recent.empty and "failure_prob" in df_recent.columns:
         st.sidebar.write("Last prob:", f"{df_recent['failure_prob'].iloc[-1]:.4f}")
 
+# REST API link
+st.sidebar.markdown("---")
+st.sidebar.markdown("### \U0001f50c REST API")
+st.sidebar.markdown("[API Docs (Swagger)](http://localhost:8502/docs)")
+st.sidebar.markdown("[Health Check](http://localhost:8502/health)")
+st.sidebar.markdown("[Live Metrics](http://localhost:8502/metrics)")
+
 # Email configuration status
 st.sidebar.markdown("---")
 _email_from = os.getenv("ALERT_EMAIL_FROM", "")
