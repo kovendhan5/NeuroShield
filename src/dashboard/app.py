@@ -450,22 +450,28 @@ st.sidebar.markdown("[API Docs (Swagger)](http://localhost:8502/docs)")
 st.sidebar.markdown("[Health Check](http://localhost:8502/health)")
 st.sidebar.markdown("[Live Metrics](http://localhost:8502/metrics)")
 
-# Email configuration status
+# Notification configuration status
 st.sidebar.markdown("---")
-_email_from = os.getenv("ALERT_EMAIL_FROM", "")
-_email_to = os.getenv("ALERT_EMAIL_TO", "")
-_email_pass = os.getenv("ALERT_EMAIL_PASSWORD", "")
-if all([_email_from, _email_to, _email_pass]):
-    st.sidebar.success(f"📧 Email alerts → {_email_to}")
-else:
-    _missing = []
-    if not _email_from:
-        _missing.append("ALERT_EMAIL_FROM")
-    if not _email_to:
-        _missing.append("ALERT_EMAIL_TO")
-    if not _email_pass:
-        _missing.append("ALERT_EMAIL_PASSWORD")
-    st.sidebar.warning(f"📧 Email not configured\nMissing: {', '.join(_missing)}")
+st.sidebar.markdown("### \U0001f514 Notifications")
+
+_slack_configured = bool(os.getenv('SLACK_WEBHOOK_URL'))
+_email_configured = all([
+    os.getenv('ALERT_EMAIL_FROM'),
+    os.getenv('ALERT_EMAIL_TO'),
+    os.getenv('ALERT_EMAIL_PASSWORD')
+])
+
+st.sidebar.write(
+    "\U0001f4e7 Email:",
+    "\u2705 Enabled" if _email_configured else "\u26aa Disabled")
+st.sidebar.write(
+    "\U0001f4ac Slack:",
+    "\u2705 Enabled" if _slack_configured else "\u26aa Disabled")
+
+if not _email_configured and not _slack_configured:
+    st.sidebar.caption(
+        "Configure email or Slack in .env "
+        "to receive alerts")
 
 # ──────────────────────────────────────────────────────────────────────────────
 # FIX 8 — METRICS FROM REAL DATA

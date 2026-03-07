@@ -158,7 +158,28 @@ def send_healing_notification(action: str, reason: str,
     </div>
     </body></html>
     """
-    return send_email_alert(subject, plain, html)
+    email_sent = send_email_alert(subject, plain, html)
+
+    # Also send to Slack
+    color = '#36a64f' if 'success' in result.lower() else '#cc0000'
+    slack_sent = send_slack_notification(
+        title=f"Auto-Healed: {action}",
+        message=reason,
+        color=color,
+        fields=[
+            {"title": "Action", "value": action},
+            {"title": "Result", "value": result},
+            {"title": "CPU",
+             "value": f"{telemetry.get('prometheus_cpu_usage', 'N/A')}%"},
+            {"title": "Memory",
+             "value": f"{telemetry.get('prometheus_memory_usage', 'N/A')}%"},
+            {"title": "Build",
+             "value": telemetry.get('jenkins_last_build_status', 'N/A')},
+            {"title": "Dashboard",
+             "value": "http://localhost:8501"}
+        ]
+    )
+    return email_sent or slack_sent
 
 
 def send_escalation_alert(reason: str, report_path: str,
@@ -234,7 +255,26 @@ def send_escalation_alert(reason: str, report_path: str,
     </div>
     </body></html>
     """
-    return send_email_alert(subject, plain, html)
+    email_sent = send_email_alert(subject, plain, html)
+
+    slack_sent = send_slack_notification(
+        title="\U0001f6a8 ESCALATION \u2014 Human Required",
+        message=reason,
+        color='#cc0000',
+        fields=[
+            {"title": "Reason", "value": reason},
+            {"title": "CPU",
+             "value": f"{telemetry.get('prometheus_cpu_usage', 'N/A')}%"},
+            {"title": "Memory",
+             "value": f"{telemetry.get('prometheus_memory_usage', 'N/A')}%"},
+            {"title": "Report", "value": report_path},
+            {"title": "Jenkins",
+             "value": "http://localhost:8080"},
+            {"title": "Dashboard",
+             "value": "http://localhost:8501"}
+        ]
+    )
+    return email_sent or slack_sent
 
 
 def send_self_ci_failure_alert(build_number: int,
@@ -279,6 +319,57 @@ def write_active_alert(
         logger.info("[ALERT] Active alert written to %s", alert_path)
     except Exception as exc:
         logger.warning("[ALERT] Failed to write active alert: %s", exc)
+
+
+def send_slack_notification(title: str, message: str,
+                             color: str = '#1a1a2e',
+                             fields: list = None) -> bool:
+    """Send a Slack notification via Incoming Webhook.
+
+    Reads SLACK_WEBHOOK_URL from environment.  Returns True if sent.
+    """
+    webhook_url = os.getenv('SLACK_WEBHOOK_URL')
+
+    if not webhook_url:
+        logger.info(
+            "Slack not configured \u2014 set SLACK_WEBHOOK_URL in .env")
+        return False
+
+    try:
+        import urllib.request
+        import json as _json
+
+        attachment = {
+            "color": color,
+            "title": f"\U0001f6e1\ufe0f NeuroShield \u2014 {title}",
+            "text": message,
+            "footer": "NeuroShield AIOps",
+            "ts": int(datetime.now().timestamp())
+        }
+
+        if fields:
+            attachment["fields"] = [
+                {"title": f["title"],
+                 "value": f["value"],
+                 "short": f.get("short", True)}
+                for f in fields
+            ]
+
+        payload = _json.dumps({
+            "attachments": [attachment]
+        }).encode('utf-8')
+
+        req = urllib.request.Request(
+            webhook_url,
+            data=payload,
+            headers={'Content-Type': 'application/json'}
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return resp.status == 200
+
+    except Exception as e:
+        logger.error(f"Slack notification failed: {e}")
+        return False
 
 
 # Keep as no-op so existing code doesn't break during transition
