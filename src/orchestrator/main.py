@@ -27,7 +27,7 @@ from stable_baselines3 import PPO
 
 from src.prediction.predictor import FailurePredictor, build_52d_state
 from src.utils.notifications import (
-    send_desktop_notification, send_email_alert, write_active_alert,
+    send_email_alert, write_active_alert,
     send_healing_notification, send_escalation_alert, send_self_ci_failure_alert,
 )
 from src.utils.intelligence import detect_early_warning, explain_decision
