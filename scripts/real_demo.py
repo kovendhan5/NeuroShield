@@ -595,7 +595,7 @@ def scenario_bad_deploy_escalate() -> None:
     try:
         from src.orchestrator.main import generate_incident_report
         from src.utils.notifications import (
-            send_desktop_notification, write_active_alert
+            send_escalation_alert, write_active_alert
         )
 
         report_id, html_path = generate_incident_report(
@@ -613,11 +613,12 @@ def scenario_bad_deploy_escalate() -> None:
         )
         log("NS", C_GREEN, "Alert written to data/active_alert.json (dashboard banner active)")
 
-        send_desktop_notification(
-            "NeuroShield: Human Intervention Required",
-            "Repeated deployment failures — check dashboard",
+        send_escalation_alert(
+            reason="Repeated deployment failures — check dashboard",
+            report_path=str(html_path),
+            telemetry=context_data,
         )
-        log("NS", C_GREEN, "Desktop notification sent")
+        log("NS", C_GREEN, "Email escalation alert sent")
     except Exception as e:
         log("NS", C_YELLOW, f"  (notification/report: {e})")
 
