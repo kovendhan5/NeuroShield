@@ -157,6 +157,42 @@ python scripts/health_check.py
 
 ---
 
+## Self-CI Pipeline (Meta-Monitoring)
+
+NeuroShield monitors **its own** CI/CD pipeline — a meta-feature where the system
+watches itself for regressions.
+
+### Setup
+
+```bash
+# Create the neuroshield-ci Jenkins job and trigger the first build
+python scripts/setup_neuroshield_cicd.py
+```
+
+This creates a freestyle Jenkins job **neuroshield-ci** with 6 build steps:
+
+| Step | What It Does |
+|---|---|
+| 1. Code Quality | `py_compile` on all core modules |
+| 2. Pytest Suite | Runs all tests (`pytest tests/ -q`) |
+| 3. Model Validation | Verifies `.pth`, `.joblib` model files load correctly |
+| 4. Health Check | Runs `scripts/health_check.py` |
+| 5. Integration Test | End-to-end predict call through the real model |
+| 6. Deploy Simulation | Tests rule-based action selection logic |
+
+### How It Works
+
+- **Telemetry**: `TelemetryCollector` polls both the primary job and `neuroshield-ci`
+  via `self_ci_status` / `self_ci_duration` fields.
+- **Orchestrator**: Each main-loop cycle checks the self-CI job. On failure,
+  `handle_self_ci_failure()` writes `data/self_ci_status.json`, fires a CRITICAL
+  alert, and sends a desktop notification.
+- **Dashboard**: The sidebar shows live self-CI build status. A dedicated
+  "Self-CI History" section displays build number, result, duration, and alert state.
+- **Environment**: Set `SELF_CI_JOB=neuroshield-ci` in `.env` (default).
+
+---
+
 ## Demo Guide
 
 **Quickest demo (2 minutes, no Kubernetes needed):**

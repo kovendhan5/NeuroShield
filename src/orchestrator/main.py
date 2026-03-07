@@ -866,6 +866,79 @@ def _print_banner() -> None:
     print("=" * 65)
 
 
+# ---------------------------------------------------------------------------
+# Self-CI monitoring — NeuroShield watches its own pipeline
+# ---------------------------------------------------------------------------
+
+_SELF_CI_STATUS_FILE = Path("data/self_ci_status.json")
+
+
+def _get_self_ci_build(jenkins_url: str, job_name: str,
+                       username: str, token: str) -> Optional[Dict]:
+    """Fetch the latest build result for the self-CI job."""
+    try:
+        url = f"{jenkins_url}/job/{job_name}/lastBuild/api/json"
+        r = requests.get(url, auth=(username, token), timeout=10)
+        if r.status_code == 200:
+            d = r.json()
+            return {
+                "number": d.get("number"),
+                "result": d.get("result"),
+                "duration_ms": d.get("duration", 0),
+                "timestamp": d.get("timestamp", 0),
+                "url": d.get("url", ""),
+            }
+    except Exception as exc:
+        logging.debug("Self-CI fetch failed: %s", exc)
+    return None
+
+
+def handle_self_ci_failure(build_info: Dict, reason: str = "") -> None:
+    """Handle a failure in NeuroShield's own CI pipeline.
+
+    Writes a status file (data/self_ci_status.json), logs a critical alert,
+    and sends a desktop notification.
+    """
+    status = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "build_number": build_info.get("number"),
+        "result": build_info.get("result"),
+        "duration_ms": build_info.get("duration_ms", 0),
+        "reason": reason or f"Self-CI build #{build_info.get('number')} failed: {build_info.get('result')}",
+        "active": True,
+    }
+
+    _SELF_CI_STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _SELF_CI_STATUS_FILE.write_text(json.dumps(status, indent=2), encoding="utf-8")
+    logging.critical("SELF-CI FAILURE: build #%s → %s",
+                     build_info.get("number"), build_info.get("result"))
+
+    send_desktop_notification(
+        "NeuroShield Self-CI FAILURE",
+        status["reason"],
+    )
+    write_active_alert(
+        title="Self-CI Pipeline Failure",
+        message=status["reason"],
+        severity="CRITICAL",
+        details=status,
+    )
+
+
+def _update_self_ci_status_ok(build_info: Dict) -> None:
+    """Record a passing self-CI build in the status file."""
+    status = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "build_number": build_info.get("number"),
+        "result": build_info.get("result"),
+        "duration_ms": build_info.get("duration_ms", 0),
+        "reason": "Self-CI passed",
+        "active": False,
+    }
+    _SELF_CI_STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _SELF_CI_STATUS_FILE.write_text(json.dumps(status, indent=2), encoding="utf-8")
+
+
 def _print_cycle_header(cycle: int) -> None:
     print(f"\n{'â”€' * 55}")
     print(f"  CYCLE #{cycle}  |  {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
@@ -890,6 +963,7 @@ def main() -> None:
     jenkins_pass = _env("JENKINS_PASSWORD", "")
     jenkins_token = _env("JENKINS_TOKEN", jenkins_pass)
     job_name = _env("JENKINS_JOB", "build-pipeline")
+    self_ci_job = _env("SELF_CI_JOB", "neuroshield-ci")
     prom_url = _env("PROMETHEUS_URL", "http://localhost:9090")
     app_url = _env("DUMMY_APP_URL", "http://localhost:5000")
     poll_interval = int(_env("POLL_INTERVAL", "15"))
@@ -982,6 +1056,19 @@ def main() -> None:
                 "app_health_pct": f"{app_health['health_pct']:.0f}",
                 "app_response_ms": f"{app_health['response_ms']:.0f}",
             })
+
+            # --- Step 2b: Self-CI monitoring ---
+            if self_ci_job:
+                self_ci = _get_self_ci_build(jenkins_url, self_ci_job, jenkins_user, jenkins_token)
+                if self_ci and self_ci.get("result"):
+                    sci_result = self_ci["result"]
+                    sci_num = self_ci.get("number", "?")
+                    if sci_result in ("FAILURE", "UNSTABLE", "ABORTED"):
+                        print(f"\n  Self-CI: Build #{sci_num} → {sci_result}  ⚠ ALERT")
+                        handle_self_ci_failure(self_ci)
+                    else:
+                        print(f"\n  Self-CI: Build #{sci_num} → {sci_result}  ✓")
+                        _update_self_ci_status_ok(self_ci)
 
             # --- Step 3: Predict failure ---
             telemetry_dict = {
