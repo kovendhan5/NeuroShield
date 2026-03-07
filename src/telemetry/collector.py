@@ -183,10 +183,12 @@ class PrometheusPoll:
                     return val
             except (KeyError, ValueError):
                 pass
-        # Fallback: psutil real system CPU
+        # Fallback: psutil real system CPU (interval=0.5 for reliable reading)
         try:
             import psutil
-            return psutil.cpu_percent(interval=0.1)
+            cpu = psutil.cpu_percent(interval=0.5)
+            if cpu is not None and cpu == cpu:  # NaN guard
+                return cpu
         except Exception:
             pass
         return None
@@ -207,7 +209,9 @@ class PrometheusPoll:
         # Fallback: psutil real system memory
         try:
             import psutil
-            return psutil.virtual_memory().percent
+            mem = psutil.virtual_memory().percent
+            if mem is not None and mem == mem:  # NaN guard
+                return mem
         except Exception:
             pass
         return None
@@ -323,15 +327,15 @@ class TelemetryCollector:
         if cpu_usage is None or cpu_usage != cpu_usage:
             try:
                 import psutil as _psutil
-                cpu_usage = _psutil.cpu_percent(interval=0.1)
+                cpu_usage = _psutil.cpu_percent(interval=0.5)
             except Exception:
-                cpu_usage = None
+                cpu_usage = 0.0  # absolute last resort — never NaN
         if memory_usage is None or memory_usage != memory_usage:
             try:
                 import psutil as _psutil
                 memory_usage = _psutil.virtual_memory().percent
             except Exception:
-                memory_usage = None
+                memory_usage = 0.0  # absolute last resort — never NaN
         
         telemetry = TelemetryData(
             timestamp=timestamp,

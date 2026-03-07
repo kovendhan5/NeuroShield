@@ -663,7 +663,7 @@ def _collect_prometheus_metrics(prom_url: str) -> Dict[str, float]:
         try:
             import psutil as _psutil
             if metrics["cpu_usage"] == 0.0:
-                metrics["cpu_usage"] = _psutil.cpu_percent(interval=0.1)
+                metrics["cpu_usage"] = _psutil.cpu_percent(interval=0.5)
             if metrics["memory_usage"] == 0.0:
                 metrics["memory_usage"] = _psutil.virtual_memory().percent
         except Exception as exc:
