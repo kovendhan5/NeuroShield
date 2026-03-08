@@ -12,10 +12,13 @@ import logging
 import os
 import smtplib
 from datetime import datetime
+from email.header import Header
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.utils import formataddr
 from pathlib import Path
 from typing import Any, Dict, Optional
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -44,9 +47,10 @@ def send_email_alert(subject: str, body: str,
 
     try:
         msg = MIMEMultipart("alternative")
-        msg["From"] = f"NeuroShield AIOps <{smtp_user}>"
+        msg["From"] = formataddr(("NeuroShield AIOps", smtp_user))
         msg["To"] = to_email
-        msg["Subject"] = f"[NeuroShield] {subject}"
+        # Use Header() to prevent header injection via newlines
+        msg["Subject"] = Header(f"[NeuroShield] {subject}", "utf-8")
 
         # Plain text fallback
         msg.attach(MIMEText(body, "plain"))
@@ -333,6 +337,14 @@ def send_slack_notification(title: str, message: str,
     if not webhook_url:
         logger.info(
             "Slack not configured \u2014 set SLACK_WEBHOOK_URL in .env")
+        return False
+
+    # Validate webhook URL to prevent SSRF
+    parsed = urlparse(webhook_url)
+    if parsed.scheme != 'https' or not parsed.hostname or \
+       not parsed.hostname.endswith('.slack.com'):
+        logger.error(
+            "Invalid SLACK_WEBHOOK_URL: must be https://*.slack.com")
         return False
 
     try:

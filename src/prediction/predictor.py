@@ -104,7 +104,12 @@ class FailurePredictor:
         self.encoder.load_pca(self.model_dir / "log_pca.joblib")
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.classifier = FailureClassifier(input_dim=24)
-        state = torch.load(self.model_dir / "failure_predictor.pth", map_location=self.device)
+        # weights_only=True prevents arbitrary code execution from untrusted model files
+        state = torch.load(
+            self.model_dir / "failure_predictor.pth",
+            map_location=self.device,
+            weights_only=True,
+        )
         self.classifier.load_state_dict(state)
         self.classifier.to(self.device)
         self.classifier.eval()

@@ -31,6 +31,7 @@ from src.utils.notifications import (
     send_healing_notification, send_escalation_alert, send_self_ci_failure_alert,
 )
 from src.utils.intelligence import detect_early_warning, explain_decision
+from src.config import validate_k8s_name, validate_positive_int
 
 T = TypeVar("T")
 
@@ -83,15 +84,21 @@ def _log_mttr(failure_type: str, action_name: str, actual_mttr: float) -> None:
 
 
 def _namespace() -> str:
-    return os.getenv("K8S_NAMESPACE", "default")
+    ns = os.getenv("K8S_NAMESPACE", "default")
+    validate_k8s_name(ns, "namespace")
+    return ns
 
 
 def _affected_service() -> str:
-    return os.getenv("AFFECTED_SERVICE", "dummy-app")
+    svc = os.getenv("AFFECTED_SERVICE", "dummy-app")
+    validate_k8s_name(svc, "service")
+    return svc
 
 
 def _scale_replicas() -> int:
-    return int(os.getenv("SCALE_REPLICAS", "3"))
+    val = int(os.getenv("SCALE_REPLICAS", "3"))
+    validate_positive_int(val, "SCALE_REPLICAS")
+    return val
 
 
 @dataclass
@@ -359,6 +366,9 @@ def execute_healing_action(action_id: int, context: Dict[str, str]) -> bool:
     try:
         namespace = _namespace()
         service = context.get("affected_service", _affected_service())
+        # Validate inputs before using in subprocess commands
+        validate_k8s_name(namespace, "namespace")
+        validate_k8s_name(service, "service")
 
         if action_id == 0:  # restart_pod
             logging.info("[ACTION] restart_pod -- %s in %s", service, namespace)

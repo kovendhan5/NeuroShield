@@ -11,6 +11,7 @@ Run:
 from __future__ import annotations
 
 import logging
+import os
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -29,16 +30,20 @@ app = FastAPI(
         "Provides telemetry, prediction, healing actions, and MTTR analytics."
     ),
     version="2.0",
-    docs_url="/docs",
-    redoc_url="/redoc",
+    docs_url="/docs" if os.getenv("NEUROSHIELD_ENV", "development") != "production" else None,
+    redoc_url="/redoc" if os.getenv("NEUROSHIELD_ENV", "development") != "production" else None,
 )
 
-# CORS — allow all origins for local development
+# CORS — restrict origins; defaults safe for local dev, override for production
+_allowed_origins = os.getenv(
+    "CORS_ALLOWED_ORIGINS",
+    "http://localhost:8501,http://localhost:3000",
+).split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[o.strip() for o in _allowed_origins if o.strip()],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
