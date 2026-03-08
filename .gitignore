@@ -49,3 +49,9 @@ logs/
 ## OS
 Thumbs.db
 .DS_Store
+
+## Docker
+docker-compose.override.yml
+
+## Node (if any)
+node_modules/

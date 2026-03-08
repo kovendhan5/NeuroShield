@@ -4,6 +4,7 @@ import os
 import sys
 import threading
 import time
+from functools import wraps
 
 import psutil
 from flask import Flask, jsonify, request
@@ -15,6 +16,7 @@ app = Flask(__name__)
 # ---------------------------------------------------------------------------
 _START_TIME = time.time()
 _VERSION = os.getenv("APP_VERSION", "v1")
+_API_KEY = os.getenv("DUMMY_APP_API_KEY", "")
 _stress_bytes: list[bytearray] = []
 
 
@@ -25,6 +27,18 @@ def _memory_mb() -> float:
 
 def _cpu_percent() -> float:
     return psutil.cpu_percent(interval=0.1)
+
+
+def _require_api_key(f):
+    """Decorator: require API key header for dangerous endpoints."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if _API_KEY:
+            provided = request.headers.get("X-API-Key", "")
+            if provided != _API_KEY:
+                return jsonify({"error": "Unauthorized — set X-API-Key header"}), 401
+        return f(*args, **kwargs)
+    return decorated
 
 
 # ---------------------------------------------------------------------------
@@ -57,6 +71,7 @@ def version():
 
 
 @app.post("/crash")
+@_require_api_key
 def crash():
     """Actually crash the process — K8s will restart the pod."""
     sys.stderr.write("CRASH requested — exiting process\n")
@@ -67,6 +82,7 @@ def crash():
 
 
 @app.get("/stress")
+@_require_api_key
 def stress():
     """Allocate ~200 MB for 30 seconds, then release."""
     before = _memory_mb()
@@ -93,6 +109,7 @@ def stress():
 
 
 @app.post("/fail")
+@_require_api_key
 def fail():
     """Return 500 to simulate an application error."""
     return jsonify({"status": "error", "message": "Intentional failure"}), 500
@@ -112,4 +129,5 @@ def metrics():
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5000"))
-    app.run(host="0.0.0.0", port=port)
+    # Never run with debug=True in production
+    app.run(host="0.0.0.0", port=port, debug=False)
