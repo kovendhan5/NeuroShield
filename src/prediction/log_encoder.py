@@ -122,5 +122,12 @@ class LogEncoder:
         dump(self.pca, Path(path))
 
     def load_pca(self, path: str | Path) -> None:
-        """Load PCA model from disk."""
-        self.pca = load(Path(path))
+        """Load PCA model from disk.
+
+        WARNING: joblib.load can deserialize arbitrary objects.
+        Only load PCA files from trusted sources (your own training pipeline).
+        """
+        p = Path(path)
+        if not p.is_file():
+            raise FileNotFoundError(f"PCA model not found: {p}")
+        self.pca = load(p)

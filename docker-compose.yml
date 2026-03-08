@@ -6,7 +6,7 @@ services:
       - "8080:8080"
       - "50000:50000"
     volumes:
-      - D:/Docker/jenkins_home:/var/jenkins_home
+      - jenkins_home:/var/jenkins_home
     environment:
       - JAVA_OPTS=-Xmx512m -Xms256m -Djenkins.install.runSetupWizard=false
     restart: unless-stopped
@@ -22,5 +22,13 @@ services:
     ports:
       - "9090:9090"
     volumes:
-      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:9090/-/healthy || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  jenkins_home:
