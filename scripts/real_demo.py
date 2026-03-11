@@ -151,8 +151,8 @@ def wait_for_build(after_number: int, timeout: int = 120) -> dict | None:
 # Kubernetes helpers
 # ---------------------------------------------------------------------------
 
-def kubectl(*args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(["kubectl", *args], capture_output=True, text=True, timeout=30)
+def kubectl(*args: str, timeout: int = 30) -> subprocess.CompletedProcess:
+    return subprocess.run(["kubectl", *args], capture_output=True, text=True, timeout=timeout)
 
 
 def get_pod_status() -> str:
@@ -350,7 +350,7 @@ def scenario_bad_deploy() -> None:
 
     wait_with_dots("Waiting for rollback to complete", 15)
 
-    kubectl("rollout", "status", f"deployment/{DEPLOYMENT}", "-n", NAMESPACE, "--timeout=60s")
+    kubectl("rollout", "status", f"deployment/{DEPLOYMENT}", "-n", NAMESPACE, "--timeout=60s", timeout=90)
 
     # Also reset the env var
     kubectl("set", "env", f"deployment/{DEPLOYMENT}", "APP_VERSION=v1", "-n", NAMESPACE)
