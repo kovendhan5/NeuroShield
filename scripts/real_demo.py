@@ -636,8 +636,14 @@ def scenario_bad_deploy_escalate() -> None:
 # ---------------------------------------------------------------------------
 
 def _scenario_dep_conflict() -> None:
-    from scripts.demo_scenario_dep import run_scenario
-    run_scenario()
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "demo_scenario_dep",
+        Path(__file__).resolve().parent / "demo_scenario_dep.py",
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    mod.run_scenario()
 
 
 # ---------------------------------------------------------------------------
