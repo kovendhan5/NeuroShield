@@ -12,7 +12,7 @@ Write-Host "  NeuroShield AIOps Platform -- Starting..." -ForegroundColor Cyan
 Write-Host ""
 
 # ─── STEP 1: Check prerequisites ─────────────────────────────────────────────
-Write-Host "[1/12] Checking prerequisites..." -ForegroundColor Yellow
+Write-Host "[1/13] Checking prerequisites..." -ForegroundColor Yellow
 
 # Docker
 try {
@@ -58,7 +58,7 @@ if (-not $prom) {
 }
 
 # ─── STEP 2: Deploy dummy-app ────────────────────────────────────────────────
-Write-Host "[2/12] Deploying dummy-app to Kubernetes..." -ForegroundColor Yellow
+Write-Host "[2/13] Deploying dummy-app to Kubernetes..." -ForegroundColor Yellow
 kubectl apply -f dummy-app.yaml 2>$null | Out-Null
 kubectl rollout status deployment/dummy-app --timeout=60s 2>$null | Out-Null
 if ($LASTEXITCODE -eq 0) {
@@ -68,7 +68,7 @@ if ($LASTEXITCODE -eq 0) {
 }
 
 # ─── STEP 3: Start port-forward ──────────────────────────────────────────────
-Write-Host "[3/12] Starting kubectl port-forward..." -ForegroundColor Yellow
+Write-Host "[3/13] Starting kubectl port-forward..." -ForegroundColor Yellow
 
 # Kill any existing port-forward on 5000
 Get-Process -ErrorAction SilentlyContinue | Where-Object {
@@ -82,7 +82,7 @@ Start-Process powershell -ArgumentList @(
 Write-Host "  [OK] Port-forward started (minimized window)" -ForegroundColor Green
 
 # ─── STEP 4: Verify dummy-app health ─────────────────────────────────────────
-Write-Host "[4/12] Waiting for dummy-app health check..." -ForegroundColor Yellow
+Write-Host "[4/13] Waiting for dummy-app health check..." -ForegroundColor Yellow
 Start-Sleep -Seconds 5
 try {
     $health = Invoke-WebRequest -Uri http://localhost:5000/health -TimeoutSec 5 -UseBasicParsing
@@ -94,7 +94,7 @@ try {
 }
 
 # ─── STEP 5: Start telemetry collector ────────────────────────────────────────
-Write-Host "[5/12] Starting Telemetry Collector..." -ForegroundColor Yellow
+Write-Host "[5/13] Starting Telemetry Collector..." -ForegroundColor Yellow
 Start-Process powershell -ArgumentList @(
     "-NoProfile", "-NoExit", "-Command",
     "Set-Location '$ProjectRoot'; `$Host.UI.RawUI.WindowTitle = 'NeuroShield Telemetry'; python src/telemetry/main.py"
@@ -102,11 +102,11 @@ Start-Process powershell -ArgumentList @(
 Write-Host "  [OK] Telemetry collector started" -ForegroundColor Green
 
 # ─── STEP 6: Wait for first telemetry data ───────────────────────────────────
-Write-Host "[6/12] Waiting 10s for telemetry to collect first data..." -ForegroundColor Yellow
+Write-Host "[6/13] Waiting 10s for telemetry to collect first data..." -ForegroundColor Yellow
 Start-Sleep -Seconds 10
 
 # ─── STEP 7: Start orchestrator ──────────────────────────────────────────────
-Write-Host "[7/12] Starting Orchestrator (live mode)..." -ForegroundColor Yellow
+Write-Host "[7/13] Starting Orchestrator (live mode)..." -ForegroundColor Yellow
 Start-Process powershell -ArgumentList @(
     "-NoProfile", "-NoExit", "-Command",
     "Set-Location '$ProjectRoot'; `$Host.UI.RawUI.WindowTitle = 'NeuroShield Orchestrator'; python src/orchestrator/main.py --mode live"
@@ -114,11 +114,11 @@ Start-Process powershell -ArgumentList @(
 Write-Host "  [OK] Orchestrator started" -ForegroundColor Green
 
 # ─── STEP 8: Wait ────────────────────────────────────────────────────────────
-Write-Host "[8/12] Waiting 5s for orchestrator initialization..." -ForegroundColor Yellow
+Write-Host "[8/13] Waiting 5s for orchestrator initialization..." -ForegroundColor Yellow
 Start-Sleep -Seconds 5
 
 # ─── STEP 9: Start dashboard ─────────────────────────────────────────────────
-Write-Host "[9/12] Starting Dashboard..." -ForegroundColor Yellow
+Write-Host "[9/13] Starting Dashboard..." -ForegroundColor Yellow
 Start-Process powershell -ArgumentList @(
     "-NoProfile", "-NoExit", "-Command",
     "Set-Location '$ProjectRoot'; `$Host.UI.RawUI.WindowTitle = 'NeuroShield Dashboard'; python -m streamlit run src/dashboard/app.py"
@@ -126,19 +126,27 @@ Start-Process powershell -ArgumentList @(
 Write-Host "  [OK] Dashboard started" -ForegroundColor Green
 
 # ─── STEP 10: Start REST API ─────────────────────────────────────────────────
-Write-Host "[10/12] Starting REST API..." -ForegroundColor Yellow
+Write-Host "[10/13] Starting REST API..." -ForegroundColor Yellow
 Start-Process powershell -ArgumentList @(
     "-NoProfile", "-NoExit", "-Command",
     "Set-Location '$ProjectRoot'; `$Host.UI.RawUI.WindowTitle = 'NeuroShield API'; python scripts/start_api.py"
 ) -WindowStyle Normal
 Write-Host "  [OK] REST API started on :8502" -ForegroundColor Green
 
-# ─── STEP 11: Open browser ───────────────────────────────────────────────────
-Write-Host "[11/12] Opening dashboard in browser..." -ForegroundColor Yellow
+# ─── STEP 11: Start Brain Feed ───────────────────────────────────────────────
+Write-Host "[11/13] Starting Live Brain Feed..." -ForegroundColor Yellow
+Start-Process powershell -ArgumentList @(
+    "-NoProfile", "-NoExit", "-Command",
+    "Set-Location '$ProjectRoot'; `$Host.UI.RawUI.WindowTitle = 'NeuroShield Brain Feed'; python scripts/live_brain_feed.py"
+) -WindowStyle Normal
+Write-Host "  [OK] Brain Feed started on :8503" -ForegroundColor Green
+
+# ─── STEP 12: Open browser ───────────────────────────────────────────────────
+Write-Host "[12/13] Opening dashboard in browser..." -ForegroundColor Yellow
 Start-Sleep -Seconds 8
 Start-Process "http://localhost:8501"
 
-# ─── STEP 12: Success summary ────────────────────────────────────────────────
+# ─── STEP 13: Success summary ────────────────────────────────────────────────
 Write-Host ""
 Write-Host "==============================================" -ForegroundColor Green
 Write-Host "   NeuroShield is now running!                " -ForegroundColor Green
@@ -147,6 +155,7 @@ Write-Host ""
 Write-Host "  Dashboard:   http://localhost:8501" -ForegroundColor Cyan
 Write-Host "  REST API:    http://localhost:8502" -ForegroundColor Cyan
 Write-Host "  API Docs:    http://localhost:8502/docs" -ForegroundColor Cyan
+Write-Host "  Brain Feed:  http://localhost:8503" -ForegroundColor Cyan
 Write-Host "  Jenkins:     http://localhost:8080" -ForegroundColor Cyan
 Write-Host "  Prometheus:  http://localhost:9090" -ForegroundColor Cyan
 Write-Host "  Dummy-App:   http://localhost:5000" -ForegroundColor Cyan

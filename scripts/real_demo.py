@@ -2,10 +2,11 @@
 """NeuroShield Real Demo — triggers REAL failures and lets the orchestrator heal them.
 
 Usage:
+    python scripts/real_demo.py --scenario 0   # Dependency conflict -> detect -> fix -> retry
     python scripts/real_demo.py --scenario 1   # Flaky build failure -> auto retry
     python scripts/real_demo.py --scenario 2   # Pod crash -> auto restart
     python scripts/real_demo.py --scenario 3   # Bad deploy -> auto rollback
-    python scripts/real_demo.py --scenario all  # Run all three in sequence
+    python scripts/real_demo.py --scenario all  # Run all scenarios in sequence
 """
 
 import argparse
@@ -631,6 +632,15 @@ def scenario_bad_deploy_escalate() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Scenario 0: Dependency Conflict → Detect → Fix → Retry (delegated)
+# ---------------------------------------------------------------------------
+
+def _scenario_dep_conflict() -> None:
+    from scripts.demo_scenario_dep import run_scenario
+    run_scenario()
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -648,6 +658,7 @@ def main() -> None:
     print()
 
     scenarios = {
+        "0": _scenario_dep_conflict,    # fix_dependencies + retry_build
         "1": scenario_build_failure,    # retry_build
         "2": scenario_pod_crash,        # restart_pod
         "3": scenario_bad_deploy,       # rollback_deploy
@@ -657,7 +668,7 @@ def main() -> None:
     }
 
     if args.scenario == "all":
-        for key in ("1", "2", "3", "4", "5", "6"):
+        for key in ("0", "1", "2", "3", "4", "5", "6"):
             scenarios[key]()
             print()
             if key != "6":
@@ -666,7 +677,7 @@ def main() -> None:
         scenarios[args.scenario]()
     else:
         print(f"Unknown scenario: {args.scenario}")
-        print("Usage: python scripts/real_demo.py --scenario 1|2|3|4|5|6|all")
+        print("Usage: python scripts/real_demo.py --scenario 0|1|2|3|4|5|6|all")
         sys.exit(1)
 
     banner("DEMO COMPLETE")

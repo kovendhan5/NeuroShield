@@ -84,7 +84,7 @@ def status() -> int:
         print(f"{Fore.RED}  INJECTED{Style.RESET_ALL} — {BROKEN_FILE} is present")
         content = _docker(f"cat {BROKEN_FILE}")
         for line in content.stdout.strip().splitlines():
-            print(f"    {Fore.DIM}{line}{Style.RESET_ALL}")
+            print(f"    {Style.DIM}{line}{Style.RESET_ALL}")
         print(f"\n  Next build will {Fore.RED}FAIL{Style.RESET_ALL} at Stage 1 (Dependency Install)")
         return 0
 
