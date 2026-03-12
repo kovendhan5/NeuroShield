@@ -63,19 +63,29 @@ _app_start_time = time.time()
 
 @app.get("/prometheus_metrics", response_class=PlainTextResponse)
 async def prometheus_metrics():
-    import json
+    import json, os
+
+    # Count healing actions from healing_log.json
     healing_count = 0
+    action_counts = {}
     try:
-        with open("data/healing_log.json") as f:
-            healing_count = len(json.load(f))
+        path = os.path.join(os.path.dirname(__file__), "../../data/healing_log.json")
+        with open(path) as f:
+            logs = json.load(f)
+            healing_count = len(logs)
+            for entry in logs:
+                action = entry.get("action", "unknown")
+                action_counts[action] = action_counts.get(action, 0) + 1
     except Exception:
         pass
 
+    # Count open incidents from active_alert.json
     active_alerts = 0
     try:
-        with open("data/active_alert.json") as f:
-            data = json.load(f)
-            active_alerts = 1 if data.get("active") else 0
+        path = os.path.join(os.path.dirname(__file__), "../../data/active_alert.json")
+        with open(path) as f:
+            alert = json.load(f)
+            active_alerts = 1 if alert.get("active") else 0
     except Exception:
         pass
 
@@ -85,14 +95,25 @@ async def prometheus_metrics():
         "# HELP neuroshield_healing_actions_total Total healing actions taken",
         "# TYPE neuroshield_healing_actions_total counter",
         f"neuroshield_healing_actions_total {healing_count}",
+        "",
+        "# HELP neuroshield_healing_by_action Healing actions broken down by type",
+        "# TYPE neuroshield_healing_by_action counter",
+    ]
+    for action, count in action_counts.items():
+        lines.append(f'neuroshield_healing_by_action{{action="{action}"}} {count}')
+
+    lines += [
+        "",
         "# HELP neuroshield_uptime_seconds API uptime in seconds",
         "# TYPE neuroshield_uptime_seconds gauge",
         f"neuroshield_uptime_seconds {uptime:.1f}",
-        "# HELP neuroshield_api_up API health status",
+        "",
+        "# HELP neuroshield_api_up API health (1=up)",
         "# TYPE neuroshield_api_up gauge",
         "neuroshield_api_up 1",
-        "# HELP neuroshield_active_alerts Number of active alerts",
+        "",
+        "# HELP neuroshield_active_alerts Current active alerts",
         "# TYPE neuroshield_active_alerts gauge",
         f"neuroshield_active_alerts {active_alerts}",
     ]
-    return "\n".join(lines) + "\n"
+    return "\n".join(lines)
