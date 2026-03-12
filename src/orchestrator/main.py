@@ -1034,6 +1034,12 @@ def main() -> None:
             prom_ok, prom_lat = _check_service(f"{prom_url}/-/healthy", timeout=5)
             app_ok, app_lat = _check_service(app_url, timeout=5)
 
+            # Auto-reconnect port-forward if app appears offline
+            if not app_ok:
+                _ensure_port_forward()
+                time.sleep(3)
+                app_ok, app_lat = _check_service(app_url, timeout=5)
+
             _print_status("Jenkins", jenkins_ok, f"{jenkins_lat:.0f}ms" if jenkins_ok else "")
             _print_status("Prometheus", prom_ok, f"{prom_lat:.0f}ms" if prom_ok else "")
             _print_status("Dummy App", app_ok, f"{app_lat:.0f}ms" if app_ok else "")
