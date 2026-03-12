@@ -65,17 +65,23 @@ _app_start_time = time.time()
 async def prometheus_metrics():
     import json, os
 
-    # Count healing actions from healing_log.json
+    # Count healing actions from healing_log.json (NDJSON: one JSON object per line)
     healing_count = 0
     action_counts = {}
     try:
         path = os.path.join(os.path.dirname(__file__), "../../data/healing_log.json")
         with open(path) as f:
-            logs = json.load(f)
-            healing_count = len(logs)
-            for entry in logs:
-                action = entry.get("action", "unknown")
-                action_counts[action] = action_counts.get(action, 0) + 1
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                    healing_count += 1
+                    action = entry.get("action_name", entry.get("action", "unknown"))
+                    action_counts[action] = action_counts.get(action, 0) + 1
+                except json.JSONDecodeError:
+                    continue
     except Exception:
         pass
 
