@@ -14,13 +14,13 @@ spec:
     spec:
       containers:
         - name: dummy-app
-          image: neuroshield-dummy-app:latest
-          imagePullPolicy: IfNotPresent
+          image: incident-board:latest
+          imagePullPolicy: Never
           ports:
             - containerPort: 5000
           env:
             - name: APP_VERSION
-              value: "v1"
+              value: "v2"
           resources:
             requests:
               cpu: 10m
@@ -32,15 +32,15 @@ spec:
             httpGet:
               path: /health
               port: 5000
-            initialDelaySeconds: 5
-            periodSeconds: 10
+            initialDelaySeconds: 10
+            periodSeconds: 15
             failureThreshold: 3
           readinessProbe:
             httpGet:
               path: /health
               port: 5000
-            initialDelaySeconds: 3
-            periodSeconds: 5
+            initialDelaySeconds: 5
+            periodSeconds: 10
             failureThreshold: 2
 ---
 apiVersion: v1
