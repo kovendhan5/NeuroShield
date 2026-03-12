@@ -1207,6 +1207,22 @@ if _self_ci_path_main.exists():
             st.metric("Alert", "🚨 ACTIVE" if _sci_active else "✅ Clear")
         if _sci_data.get("reason"):
             st.caption(f"Last status: {_sci_data['reason']}")
+
+        # Show build history table if available
+        _sci_builds = _sci_data.get("builds", [])
+        if _sci_builds:
+            st.markdown("**Build History**")
+            import pandas as _pd_ci
+            _ci_rows = []
+            for _b in _sci_builds:
+                _ci_rows.append({
+                    "Build #": _b.get("number", "?"),
+                    "Result": _b.get("result", "UNKNOWN"),
+                    "Timestamp": _b.get("timestamp_str", "—"),
+                    "Duration": f"{_b.get('duration_ms', 0) / 1000:.1f}s",
+                })
+            _ci_df = _pd_ci.DataFrame(_ci_rows)
+            st.dataframe(_ci_df, use_container_width=True, hide_index=True)
     except Exception:
         st.info("⚠️ Could not read self-CI status file")
 else:
