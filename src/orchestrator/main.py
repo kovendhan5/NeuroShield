@@ -946,7 +946,31 @@ def handle_self_ci_failure(build_info: Dict, reason: str = "") -> None:
 
 
 def _update_self_ci_status_ok(build_info: Dict) -> None:
-    """Record a passing self-CI build in the status file."""
+    """Record a passing self-CI build in the status file (with history)."""
+    # Load existing history
+    existing_builds: list = []
+    if _SELF_CI_STATUS_FILE.exists():
+        try:
+            old = json.loads(_SELF_CI_STATUS_FILE.read_text(encoding="utf-8"))
+            existing_builds = old.get("builds", [])
+        except Exception:
+            pass
+
+    # Avoid duplicate entries for the same build number
+    bnum = build_info.get("number")
+    if not any(b.get("number") == bnum for b in existing_builds):
+        ts_epoch = build_info.get("timestamp", 0)
+        ts_str = datetime.fromtimestamp(ts_epoch / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S") if ts_epoch else ""
+        existing_builds.insert(0, {
+            "number": bnum,
+            "result": build_info.get("result"),
+            "duration_ms": build_info.get("duration_ms", 0),
+            "timestamp_ms": ts_epoch,
+            "timestamp_str": ts_str,
+        })
+    # Keep only latest 10 builds
+    existing_builds = existing_builds[:10]
+
     status = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "build_number": build_info.get("number"),
@@ -954,6 +978,7 @@ def _update_self_ci_status_ok(build_info: Dict) -> None:
         "duration_ms": build_info.get("duration_ms", 0),
         "reason": "Self-CI passed",
         "active": False,
+        "builds": existing_builds,
     }
     _SELF_CI_STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
     _SELF_CI_STATUS_FILE.write_text(json.dumps(status, indent=2), encoding="utf-8")
