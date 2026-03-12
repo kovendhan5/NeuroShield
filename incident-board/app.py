@@ -141,11 +141,11 @@ def crash():
 
     def _recover():
         global app_healthy
-        time.sleep(60)
+        time.sleep(120)
         app_healthy = True
 
     threading.Thread(target=_recover, daemon=True).start()
-    return jsonify({"message": "App crash simulated", "recovery_in": "60s"})
+    return jsonify({"message": "App crash simulated", "recovery_in": "120s"})
 
 
 @app.route("/stress", methods=["POST"])

@@ -738,6 +738,10 @@ def determine_healing_action(
     pod_restarts = float(telemetry.get("pod_restart_count", 0) or 0)
     build_status = str(telemetry.get("jenkins_last_build_status", "") or "").upper()
     error_rate = float(telemetry.get("prometheus_error_rate", 0) or 0)
+    app_hp = float(telemetry.get("app_health_pct", 100) or 100)
+
+    if app_hp < 100:
+        return "restart_pod", f"App health degraded ({app_hp:.0f}%) — proactive restart"
 
     if pod_restarts >= 3:
         return "restart_pod", f"Pod restart loop detected ({int(pod_restarts)} restarts)"
@@ -1106,6 +1110,21 @@ def main() -> None:
             if failure_prob != failure_prob:  # NaN check
                 failure_prob = 0.5 if _is_failure(build_status) else 0.0
 
+            # --- App health-aware override ---
+            # If dummy-app /health is degraded (503), boost failure_prob so
+            # NeuroShield acts within its 15-30s window, before K8s liveness
+            # probe triggers autonomously at ~90s.
+            _app_hp = app_health.get("health_pct", 100)
+            if _app_hp < 100:
+                _boosted = max(failure_prob, 0.78)
+                if _boosted > failure_prob:
+                    logging.info(
+                        "[HEALTH] App degraded (health_pct=%.0f%%) -- "
+                        "boosting failure_prob %.3f -> %.3f",
+                        _app_hp, failure_prob, _boosted,
+                    )
+                    failure_prob = _boosted
+            telemetry_dict["app_health_pct"] = _app_hp
             prob_bar = "â–ˆ" * int(failure_prob * 20) + "â–‘" * (20 - int(failure_prob * 20))
             prob_label = "LOW" if failure_prob < 0.3 else "MEDIUM" if failure_prob < 0.6 else "HIGH" if failure_prob < 0.8 else "CRITICAL"
             print(f"\n  Prediction:")
