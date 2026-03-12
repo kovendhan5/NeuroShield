@@ -1262,6 +1262,9 @@ def main() -> None:
                 print(f"\n  Status: System healthy -- no intervention needed")
                 if build_status == "SUCCESS":
                     failure_detected_time = None  # reset MTTR timer on healthy build
+                # Reset dedup when app is healthy again, so next crash can be healed
+                if app_health.get("health_pct", 0) >= 100:
+                    last_healed_build = None
 
             prev_build_status = build_status
 
