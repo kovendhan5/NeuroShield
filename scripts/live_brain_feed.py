@@ -26,6 +26,7 @@ app = FastAPI(title="NeuroShield Brain Feed", docs_url=None, redoc_url=None)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 HEALING_LOG = PROJECT_ROOT / "data" / "healing_log.json"
+BRAIN_FEED_EVENTS = PROJECT_ROOT / "data" / "brain_feed_events.json"
 MODEL_REPORT = PROJECT_ROOT / "data" / "model_report_summary.json"
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -50,22 +51,33 @@ _last_count = 0
 
 
 async def _event_stream():
-    """Yield SSE events: new log entries + heartbeat every 3 s."""
+    """Yield SSE events: new brain feed events + heartbeat every 3 s."""
     global _last_count
     _last_count = 0
 
     while True:
-        entries = _read_log_tail(200)
-        current = len(entries)
+        events = []
+        try:
+            if BRAIN_FEED_EVENTS.exists():
+                events = json.loads(BRAIN_FEED_EVENTS.read_text(encoding="utf-8"))
+        except Exception:
+            events = []
+
+        current = len(events)
 
         if current > _last_count:
-            for e in entries[_last_count:]:
-                ok = e.get("success", False)
-                cls = "ok" if ok else "fail"
-                action = e.get("action_name", "unknown")
-                detail = e.get("detail", "")[:120]
+            for e in events[_last_count:]:
+                action = e.get("action", "unknown")
+                prob = e.get("prob", 0)
+                success = e.get("success", False)
+                duration = e.get("duration_ms", 0)
                 ts = e.get("timestamp", "")
-                msg = f"[{ts}] {action} → {'✓' if ok else '✗'} {detail}"
+
+                # Format: "⚠️ Failure — prob: 0.9996 → 🧠 PPO: action → ✅ healed"
+                status_icon = "✅" if success else "❌"
+                msg = f"[{ts}] {action} (prob={prob:.4f}) → {status_icon} {duration}ms"
+                cls = "ok" if success else "fail"
+
                 payload = json.dumps({"msg": msg, "cls": cls})
                 yield f"data: {payload}\n\n"
             _last_count = current
@@ -104,6 +116,25 @@ async def metrics():
         except Exception:
             pass
 
+    # Extract metrics from the nested structure
+    f1 = "N/A"
+    auc = "N/A"
+    mttr = "N/A"
+
+    try:
+        # F1 and AUC from NeuroShield predictor
+        if "predictor" in model and "NeuroShield (DistilBERT + PPO)" in model["predictor"]:
+            ns = model["predictor"]["NeuroShield (DistilBERT + PPO)"]
+            f1 = ns.get("f1", "N/A")
+            auc = ns.get("auc", "N/A")
+
+        # MTTR from RL agent
+        if "rl_agent" in model and "NeuroShield PPO (real)" in model["rl_agent"]:
+            rl = model["rl_agent"]["NeuroShield PPO (real)"]
+            mttr = rl.get("avg_mttr_reduction", "N/A")
+    except Exception:
+        pass
+
     entries = _read_log_tail(500)
     total = len(entries)
     ok = sum(1 for e in entries if e.get("success"))
@@ -113,9 +144,9 @@ async def metrics():
         actions[a] = actions.get(a, 0) + 1
 
     return {
-        "f1": model.get("f1_score", "N/A"),
-        "auc": model.get("auc_roc", "N/A"),
-        "mttr_reduction": model.get("mttr_reduction_pct", "N/A"),
+        "f1": f1,
+        "auc": auc,
+        "mttr_reduction": mttr,
         "total_heals": total,
         "success_rate": f"{ok/total*100:.0f}%" if total else "N/A",
         "top_actions": dict(sorted(actions.items(), key=lambda x: -x[1])[:5]),

@@ -322,8 +322,10 @@ def _ensure_port_forward(service: str = "dummy-app", port: int = 5000) -> None:
         except Exception:
             pass
         _port_forward_proc = None
+        logging.info("[PORT-FORWARD] Killed old process")
 
     # Wait for a ready pod
+    logging.info("[PORT-FORWARD] Waiting for ready endpoints...")
     deadline = time.time() + 30
     while time.time() < deadline:
         try:
@@ -333,6 +335,7 @@ def _ensure_port_forward(service: str = "dummy-app", port: int = 5000) -> None:
                 capture_output=True, text=True, timeout=10,
             )
             if r.returncode == 0 and r.stdout.strip():
+                logging.info("[PORT-FORWARD] Endpoints ready: %s", r.stdout.strip())
                 break
         except Exception:
             pass
@@ -344,7 +347,20 @@ def _ensure_port_forward(service: str = "dummy-app", port: int = 5000) -> None:
             ["kubectl", "port-forward", f"svc/{service}", f"{port}:{port}", "-n", namespace],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
-        logging.info("[PORT-FORWARD] Reconnected svc/%s on port %d", service, port)
+
+        # Verify port-forward is working
+        deadline = time.time() + 15
+        while time.time() < deadline:
+            try:
+                r = requests.get(f"http://localhost:{port}/health", timeout=2)
+                if r.status_code < 500:
+                    logging.info("[PORT-FORWARD] Reconnected svc/%s on port %d ✓", service, port)
+                    return
+            except Exception:
+                pass
+            time.sleep(1)
+
+        logging.warning("[PORT-FORWARD] Process started but health check failed")
     except Exception as exc:
         logging.warning("[PORT-FORWARD] Failed to reconnect: %s", exc)
 
@@ -599,6 +615,35 @@ def _log_healing_json(action_id: int, success: bool, duration_ms: float,
     }
     with open(p, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry) + "\n")
+
+
+def _write_brain_feed_event(action_name: str, failure_prob: float, success: bool, duration_ms: float) -> None:
+    """Write a brain feed event for the live SSE stream at localhost:8503."""
+    p = Path("data/brain_feed_events.json")
+    p.parent.mkdir(parents=True, exist_ok=True)
+
+    event = {
+        "timestamp": datetime.now(timezone.utc).strftime("%H:%M:%S"),
+        "action": action_name,
+        "prob": round(failure_prob, 4),
+        "success": success,
+        "duration_ms": round(duration_ms),
+        "class": "heal" if action_name != "escalate_to_human" else "escalate",
+    }
+
+    # Read existing events, append new one, keep last 50
+    events = []
+    try:
+        if p.exists():
+            events = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        events = []
+
+    events.append(event)
+    events = events[-50:]  # Keep only last 50 events
+
+    with open(p, "w", encoding="utf-8") as f:
+        json.dump(events, f, indent=2)
 
 
 def _is_failure(result: str) -> bool:
@@ -1259,6 +1304,9 @@ def main() -> None:
                         successful_actions += 1
                         print(f"    Result:   SUCCESS")
 
+                        # Write brain feed event for live SSE stream
+                        _write_brain_feed_event(action_name, failure_prob, success, 0)
+
                         # MTTR measurement — only log realistic values (5-300s)
                         if failure_detected_time is not None:
                             actual_mttr = time.time() - failure_detected_time
@@ -1273,6 +1321,8 @@ def main() -> None:
                             failure_detected_time = None
                     else:
                         print(f"    Result:   FAILED")
+                        # Write brain feed event for failed healing
+                        _write_brain_feed_event(action_name, failure_prob, success, 0)
 
                     # Log healing decision
                     _append_csv("data/healing_log.csv", {
