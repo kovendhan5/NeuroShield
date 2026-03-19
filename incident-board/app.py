@@ -141,11 +141,11 @@ def crash():
 
     def _recover():
         global app_healthy
-        time.sleep(120)
+        time.sleep(25)
         app_healthy = True
 
     threading.Thread(target=_recover, daemon=True).start()
-    return jsonify({"message": "App crash simulated", "recovery_in": "120s"})
+    return jsonify({"message": "App crash simulated", "recovery_in": "25s"})
 
 
 @app.route("/stress", methods=["POST"])
@@ -237,11 +237,48 @@ a{color:#00ff88;text-decoration:none}
 /* Footer */
 .footer{text-align:center;padding:18px 32px;border-top:1px solid #2a2a4a;font-size:.78rem;color:#555}
 
+/* Crash screen */
+#crash-screen{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:linear-gradient(135deg,#1a0000,#330000);z-index:9999;justify-content:center;align-items:center;flex-direction:column;gap:30px}
+#crash-screen.visible{display:flex}
+.crash-content{text-align:center}
+.crash-icon{font-size:6rem;margin-bottom:20px;animation:shake .1s infinite}
+@keyframes shake{0%,100%{transform:translate(0,0)}25%{transform:translate(-5px,0)}75%{transform:translate(5px,0)}}
+.crash-title{font-size:3rem;color:#ff3333;font-weight:700;margin-bottom:10px;text-shadow:0 0 20px rgba(255,51,51,.5)}
+.crash-message{font-size:1.2rem;color:#ff9999;margin-bottom:30px}
+.crash-blinking{animation:blink 1s infinite;font-size:1.1rem;color:#ffff00}
+@keyframes blink{0%,50%{opacity:1}51%,100%{opacity:.2}}
+
+/* Heal screen */
+#heal-screen{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:linear-gradient(135deg,#001a00,#003300);z-index:9999;justify-content:center;align-items:center;flex-direction:column;gap:30px}
+#heal-screen.visible{display:flex}
+.heal-content{text-align:center}
+.heal-icon{font-size:6rem;margin-bottom:20px;animation:pulse-heal 1s infinite}
+@keyframes pulse-heal{0%,100%{transform:scale(1)}50%{transform:scale(1.1)}}
+.heal-title{font-size:3rem;color:#00ff00;font-weight:700;margin-bottom:10px;text-shadow:0 0 20px rgba(0,255,0,.5)}
+.heal-message{font-size:1.2rem;color:#99ff99}
+
 /* Responsive */
 @media(max-width:700px){.stats{grid-template-columns:repeat(2,1fr)}.header,.stats,.feed{padding-left:16px;padding-right:16px}}
 </style>
 </head>
 <body>
+
+<div id="crash-screen">
+  <div class="crash-content">
+    <div class="crash-icon">💥</div>
+    <div class="crash-title">SERVICE DOWN</div>
+    <div class="crash-message">IncidentBoard has crashed</div>
+    <div class="crash-blinking">⏳ Waiting for NeuroShield to heal...</div>
+  </div>
+</div>
+
+<div id="heal-screen">
+  <div class="heal-content">
+    <div class="heal-icon">✅</div>
+    <div class="heal-title">HEALED BY NEUROSHIELD</div>
+    <div class="heal-message">System recovered and restored</div>
+  </div>
+</div>
 
 <div class="header">
   <div class="header-left">
@@ -266,6 +303,7 @@ a{color:#00ff88;text-decoration:none}
 
 <script>
 const startTs = Date.now();
+let isHealthy = true;
 
 function fmtUptime(ms){
   let s=Math.floor(ms/1000), h=Math.floor(s/3600), m=Math.floor((s%3600)/60); s=s%60;
@@ -316,6 +354,36 @@ async function ackIncident(id){
   fetchIncidents();
 }
 
+// Health check every 2 seconds
+async function healthCheck(){
+  try{
+    const res=await fetch('/health',{method:'GET',timeout:1000});
+    if(res.ok && isHealthy===false){
+      // Recovered from crash
+      console.log('App recovered!');
+      document.getElementById('heal-screen').classList.add('visible');
+      setTimeout(()=>{
+        document.getElementById('heal-screen').classList.remove('visible');
+        isHealthy=true;
+        document.body.style.display='flex';
+        fetchIncidents();
+      },3000);
+    } else if(res.ok){
+      isHealthy=true;
+      document.getElementById('crash-screen').classList.remove('visible');
+      document.body.style.display='flex';
+    }
+  }catch(e){
+    if(isHealthy){
+      // Just crashed
+      console.log('App crashed!');
+      isHealthy=false;
+      document.getElementById('crash-screen').classList.add('visible');
+      document.body.style.display='none';
+    }
+  }
+}
+
 // Uptime counter
 setInterval(()=>{
   document.getElementById('stat-uptime').textContent=fmtUptime(Date.now()-startTs);
@@ -324,6 +392,9 @@ setInterval(()=>{
 // Live refresh every 3 seconds
 fetchIncidents();
 setInterval(fetchIncidents,3000);
+
+// Health check every 2 seconds
+setInterval(healthCheck,2000);
 </script>
 </body>
 </html>"""
