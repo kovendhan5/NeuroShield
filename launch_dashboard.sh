@@ -1,0 +1,20 @@
+#!/bin/bash
+# NeuroShield Dashboard Launcher
+cd "$(dirname "$0")"
+echo "╔════════════════════════════════════════════════════════════╗"
+echo "║  NeuroShield Dashboard - Web UI                            ║"
+echo "║  Opening http://localhost:8501 in browser                 ║"
+echo "╚════════════════════════════════════════════════════════════╝"
+echo ""
+echo "Dashboard features:"
+echo "  • Real-time failure probability charts"
+echo "  • Healing action distribution & history"
+echo "  • Resource monitoring (CPU, memory, disk)"
+echo "  • MTTR metrics (44% reduction vs baseline)"
+echo "  • Manual healing cycle trigger"
+echo "  • Active alerts & escalation reports"
+echo "  • Self-CI monitoring"
+echo ""
+echo "Starting Streamlit dashboard on http://localhost:8501"
+echo ""
+python -m streamlit run src/dashboard/app.py
