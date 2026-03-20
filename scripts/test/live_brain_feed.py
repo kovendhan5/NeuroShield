@@ -24,7 +24,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 
 app = FastAPI(title="NeuroShield Brain Feed", docs_url=None, redoc_url=None)
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]  # scripts/test -> scripts -> project_root
 HEALING_LOG = PROJECT_ROOT / "data" / "healing_log.json"
 BRAIN_FEED_EVENTS = PROJECT_ROOT / "data" / "brain_feed_events.json"
 MODEL_REPORT = PROJECT_ROOT / "data" / "model_report_summary.json"
