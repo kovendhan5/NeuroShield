@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
         - name: dummy-app
-          image: incident-board:latest
+          image: pipeline-watch:latest
           imagePullPolicy: Never
           ports:
             - containerPort: 5000

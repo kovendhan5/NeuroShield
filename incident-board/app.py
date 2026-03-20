@@ -10,7 +10,9 @@ import random
 import os
 import signal
 import psutil
+import json
 from datetime import datetime, timedelta
+from pathlib import Path
 
 app = Flask(__name__)
 
@@ -117,6 +119,46 @@ def get_incidents():
     with incidents_lock:
         sorted_inc = sorted(INCIDENTS, key=lambda i: i["ts"], reverse=True)
         return jsonify([_incident_json(i) for i in sorted_inc])
+
+
+@app.route("/api/incidents/from-neuroshield", methods=["POST"])
+def create_neuroshield_incident():
+    """Create incident from NeuroShield healing event."""
+    global incident_id_counter
+
+    payload = request.get_json() or {}
+    action = payload.get("action", "unknown")
+    success = payload.get("success", True)
+
+    action_to_title = {
+        "restart_pod": "Pod crash detected — automatic restart executed",
+        "scale_up": "Resource spike — deployment scaled to 3 replicas",
+        "retry_build": "Build failure — retry triggered by AI",
+        "rollback_deploy": "Bad deployment detected — rollback executed",
+        "escalate_to_human": "Unknown failure pattern — escalated to engineer",
+        "clear_cache": "Memory bloat detected — cache cleared",
+    }
+
+    severity_map = {"escalate": "CRITICAL", "fail": "WARNING", "heal": "WARNING", "ok": "INFO"}
+    event_class = payload.get("class", "ok")
+
+    with incidents_lock:
+        new_incident = {
+            "id": incident_id_counter,
+            "severity": severity_map.get(event_class, "INFO"),
+            "title": action_to_title.get(action, f"{action} executed"),
+            "service": "neuroshield",
+            "status": "resolved",
+            "ts": datetime.now(),
+        }
+        INCIDENTS.insert(0, new_incident)
+        incident_id_counter += 1
+
+        # Keep only last 50 incidents
+        if len(INCIDENTS) > 50:
+            INCIDENTS.pop()
+
+    return jsonify({"success": True, "id": new_incident["id"]}), 201
 
 
 @app.route("/api/incidents/<int:inc_id>/acknowledge", methods=["POST"])
