@@ -106,6 +106,10 @@ threading.Thread(target=_incident_generator, daemon=True).start()
 def _count_requests():
     global request_count
     request_count += 1
+    # When app crashed, all routes except /health and /crash return 503
+    if not app_healthy:
+        if request.path not in ['/health', '/crash']:
+            return jsonify({"error": "app crashed", "status": "unhealthy"}), 503
 
 
 @app.route("/api/incidents", methods=["GET"])
@@ -364,22 +368,20 @@ async function healthCheck(){
       document.getElementById('heal-screen').classList.add('visible');
       setTimeout(()=>{
         document.getElementById('heal-screen').classList.remove('visible');
+        document.getElementById('crash-screen').classList.remove('visible');
         isHealthy=true;
-        document.body.style.display='flex';
         fetchIncidents();
       },3000);
     } else if(res.ok){
       isHealthy=true;
       document.getElementById('crash-screen').classList.remove('visible');
-      document.body.style.display='flex';
     }
   }catch(e){
     if(isHealthy){
       // Just crashed
-      console.log('App crashed!');
+      console.log('App crashed!', e);
       isHealthy=false;
       document.getElementById('crash-screen').classList.add('visible');
-      document.body.style.display='none';
     }
   }
 }

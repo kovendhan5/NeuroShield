@@ -767,6 +767,8 @@ def determine_healing_action(
     """Select a healing action using rules first, falling back to the ML decision.
 
     Rule-based overrides ensure all 6 healing actions can trigger in a demo:
+    - app DOWN (health=0%) → ALWAYS restart_pod
+    - app degraded (0% < health < 100%) → restart_pod
     - pod restart loop → restart_pod
     - CPU/memory spike → scale_up
     - build failure → retry_build
@@ -785,7 +787,14 @@ def determine_healing_action(
     error_rate = float(telemetry.get("prometheus_error_rate", 0) or 0)
     app_hp = float(telemetry.get("app_health_pct", 100) or 100)
 
+    # EXPLICIT: App is DOWN — ALWAYS restart, no exceptions
+    if app_hp == 0:
+        logging.info("[OVERRIDE] App health=0%% (CRASHED) → forcing restart_pod (overriding %s)", ml_action)
+        return "restart_pod", f"[OVERRIDE] App health=0% → forcing restart_pod"
+
+    # App is degraded but not completely down
     if app_hp < 100:
+        logging.info("[OVERRIDE] App health=%d%% (degraded) → restart_pod (overriding %s)", int(app_hp), ml_action)
         return "restart_pod", f"App health degraded ({app_hp:.0f}%) — proactive restart"
 
     if pod_restarts >= 3:
