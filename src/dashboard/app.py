@@ -585,14 +585,15 @@ if mttr_has_data:
 
     mc1, mc2, mc3 = st.columns(3)
     with mc1:
-        st.metric("Avg MTTR Reduction", f"{mttr_vals.mean():.1f}%",
-                   delta=f"{len(mttr_vals)} incidents measured", delta_color="off")
+        best = mttr_vals.max() if len(mttr_vals) > 0 else 0
+        st.metric("Best MTTR Reduction", f"{best:.1f}%",
+                   delta="best measured result", delta_color="off")
     with mc2:
         st.metric("Avg Actual MTTR", f"{actual_vals.mean():.1f}s",
                    delta="automated response", delta_color="off")
     with mc3:
-        best = mttr_vals.max() if len(mttr_vals) > 0 else 0
-        st.metric("Best Reduction", f"{best:.1f}%", delta="single incident", delta_color="off")
+        st.metric("Avg Reduction", f"{mttr_vals.mean():.1f}%",
+                   delta=f"across {len(mttr_vals)} incidents", delta_color="off")
 
     recent_mttr = mttr_df.tail(10)[["timestamp", "failure_type", "action",
                                       "actual_mttr_s", "baseline_mttr_s", "reduction_pct"]]
