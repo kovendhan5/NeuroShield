@@ -97,62 +97,73 @@ NeuroShield/
 
 ## Quick Start
 
-### Prerequisites
+### ⚡ FASTEST WAY (2 minutes)
 
-- Python 3.10+
-- Docker Desktop (for Jenkins & Prometheus)
-- Minikube (optional, for Kubernetes demo)
+**Windows:**
+```batch
+double-click: scripts/launcher/launch_orchestrator.bat
+double-click: scripts/launcher/launch_dashboard.bat
+open http://localhost:8501
+```
 
-### 1. Install dependencies
+**Mac/Linux:**
+```bash
+bash scripts/launcher/launch_orchestrator.sh &
+bash scripts/launcher/launch_dashboard.sh &
+open http://localhost:8501
+```
 
+This runs in **SIMULATION MODE** (no Docker needed, works immediately!)
+
+---
+
+### 📖 Full Setup Guides
+
+- **Quick Setup (2 min):** See `docs/GUIDES/SETUP.md` → Quick Start section
+- **Detailed Setup (includes Docker/Live mode):** See `docs/GUIDES/SETUP.md` → Two Run Modes section
+- **Demo Script (for presentations):** See `docs/GUIDES/DEMO.md`
+
+---
+
+### Manual Setup (If Needed)
+
+**1. Install dependencies**
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. Configure environment
-
+**2. Configure environment**
 ```bash
 cp .env.example .env
-# Edit .env with your Jenkins token
-# Get token at: http://localhost:8080/user/admin/configure
+# Edit .env with your Jenkins token (only needed for LIVE mode)
 ```
 
-### 3. Start infrastructure
-
-```bash
-docker compose up -d          # Jenkins + Prometheus
-python setup_jenkins_job.py   # Create the build pipeline job
-```
-
-### 4. Train models
-
+**3. Train models** (if not already trained)
 ```bash
 python src/prediction/train.py
 python -m src.rl_agent.train
 ```
 
-### 5. Run the orchestrator
-
+**4. Run orchestrator** (choose one)
 ```bash
-# Simulation mode (no live services needed)
+# Simulation mode (no external services needed - RECOMMENDED)
 python src/orchestrator/main.py --mode simulate
 
-# Live mode (requires Jenkins + Prometheus running)
+# Live mode (requires Docker + Jenkins + Prometheus)
+docker compose up -d
 python src/orchestrator/main.py --mode live
 ```
 
-### 6. Launch the dashboard
-
+**5. Launch dashboard**
 ```bash
 python -m streamlit run src/dashboard/app.py
 ```
+Open [http://localhost:8501](http://localhost:8501)
 
-Open [http://localhost:8501](http://localhost:8501) in your browser.
-
-### 7. Health check
-
+**6. Health check**
 ```bash
 python scripts/health_check.py
+pytest tests/ -v
 ```
 
 ---

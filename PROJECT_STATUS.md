@@ -190,15 +190,95 @@ All components working. All tests passing. Ready to demonstrate.
 
 ---
 
-## Quick Links
+---
 
-- **COMPLETE_STARTUP_GUIDE.md** - Detailed launch instructions
-- **LAUNCH_GUIDE.md** - Simulation vs Live mode comparison
-- **README.md** - Full project documentation
-- **src/orchestrator/main.py** - Main control loop
-- **src/dashboard/app.py** - Web dashboard
-- **models/** - Trained ML artifacts
+## 📊 Live System Infrastructure Status
+
+### System Component Health
+
+| Component | Status | Access Point | Details |
+|-----------|--------|--------------|---------|
+| **Docker** | ✓ Running | N/A | All containers initialized |
+| **Jenkins** | ✓ Running | localhost:8080 | Admin: admin/admin123 |
+| **Prometheus** | ✓ Running | localhost:9090 | Metrics collector online |
+| **Minikube** | ✓ Running | Docker Desktop | K8s cluster active |
+| **Models** | ✓ Loaded | models/ | All 3 trained models ready |
+| **Tests** | ✓ 95/95 Pass | pytest | Full test coverage |
+
+### Data Flow
+
+```
+Jenkins API        Prometheus API
+    |                    |
+    +────────┬───────────+
+             |
+     TelemetryCollector
+             |
+       Telemetry Data (52D)
+             |
+    ┌────────────────┐
+    │ DistilBERT     │ → 768D embeddings
+    │ LogEncoder     │
+    └────────┬───────┘
+             |
+    ┌────────────────┐
+    │ PCA Reducer    │ → 16D reduced
+    └────────┬───────┘
+             |
+    ┌────────────────┐
+    │ FailurePredictor│ → probability
+    │ (PyTorch NN)   │
+    └────────┬───────┘
+             |
+    ┌────────────────┐
+    │ PPO Agent      │ → action (0-5)
+    │ (RL policy)    │
+    └────────┬───────┘
+             |
+    ┌────────────────┐
+    │ Rule Overrides │ → final action
+    └────────┬───────┘
+             |
+  ExecuteHealingAction
+      (6 actions)
+             |
+    Data + Dashboard
+```
+
+### Generated Logs & Data
+
+In `data/` directory:
+- **healing_log.json** — All healing decisions with metadata
+- **mttr_log.csv** — MTTR baseline vs actual per action
+- **action_history.csv** — Audit log of all actions
+- **active_alert.json** — Current high-priority alert (if any)
+- **telemetry.csv** — Raw telemetry poll history
+- **escalation_reports/** — HTML incident reports
+
+### Troubleshooting
+
+| Problem | Solution |
+|---------|----------|
+| Orchestrator not polling | Check Jenkins online at localhost:8080 |
+| Dashboard not updating | Refresh browser (Ctrl+R) |
+| High CPU on orchestrator | Increase POLL_INTERVAL to 30+ seconds in .env |
+| Models missing | Run: `python src/prediction/train.py` |
+| Port 8501 in use | Change STREAMLIT_PORT in .env |
 
 ---
 
-**Status: READY ✅ | Run `launch_orchestrator.bat` then `launch_dashboard.bat`**
+## Quick Links
+
+- **docs/GUIDES/SETUP.md** — Complete launch instructions (all modes)
+- **docs/GUIDES/DEMO.md** — Demo script for presentations (8-10 min)
+- **README.md** — Full project documentation
+- **src/orchestrator/main.py** — Main control loop (375 lines)
+- **src/dashboard/app.py** — Web dashboard (1100+ lines)
+- **models/** — Trained ML artifacts
+
+---
+
+**Status: ✅ READY TO RUN**
+- Launchers: `scripts/launcher/launch_orchestrator.bat` + `scripts/launcher/launch_dashboard.bat`
+- Full Setup Guide: See `docs/GUIDES/SETUP.md`
+- Demo Guide: See `docs/GUIDES/DEMO.md`
