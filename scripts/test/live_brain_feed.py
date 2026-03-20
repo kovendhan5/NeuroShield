@@ -157,74 +157,86 @@ HTML_PAGE = """\
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{background:#0d0d1a;color:#e0e0e0;font-family:'Segoe UI',system-ui,sans-serif;overflow-x:hidden}
-.header{text-align:center;padding:18px 0 10px;border-bottom:1px solid #1f1f3a}
+.header{text-align:center;padding:18px 0 10px;border-bottom:1px solid #1f1f3a;position:relative;z-index:10}
 .header h1{font-size:1.4rem;letter-spacing:.05em;color:#00e5ff}
 .header .dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:#0f0;
   margin-right:8px;animation:pulse 1.5s infinite}
 @keyframes pulse{0%,100%{opacity:1;box-shadow:0 0 6px #0f0}50%{opacity:.4;box-shadow:none}}
-.grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;padding:16px;height:calc(100vh - 70px)}
+.stat-line{font-size:0.9rem;color:#00e5ff;font-weight:600;margin-top:6px}
+.grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;padding:16px;height:calc(100vh - 100px)}
 .col{background:#12122a;border:1px solid #1f1f3a;border-radius:10px;padding:14px;overflow:hidden;
   display:flex;flex-direction:column}
 .col h2{font-size:.95rem;color:#888;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px}
 /* Pipeline column */
 .pipeline{display:flex;flex-direction:column;gap:8px;flex:1;justify-content:center}
 .stage{background:#1a1a35;border-radius:6px;padding:10px 14px;font-size:.85rem;
-  border-left:3px solid #00e5ff;position:relative;transition:background .3s}
+  border-left:3px solid #00e5ff;position:relative;transition:background .3s;display:flex;align-items:center;gap:10px}
 .stage.active{background:#1a2a3a;border-left-color:#0f0;animation:glow 2s infinite alternate}
 @keyframes glow{from{box-shadow:0 0 4px rgba(0,229,255,.15)}to{box-shadow:0 0 12px rgba(0,229,255,.35)}}
-.stage .num{color:#00e5ff;font-weight:700;margin-right:6px}
+.stage-icon{font-size:1.3rem}
+.stage .num{color:#00e5ff;font-weight:700;background:rgba(0,229,255,.2);width:24px;height:24px;
+  border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0}
 .arrow{text-align:center;color:#333;font-size:1.2rem}
 /* Feed column */
 #feed{flex:1;overflow-y:auto;font-family:'Cascadia Code','Fira Code',monospace;font-size:.78rem;line-height:1.6}
 #feed::-webkit-scrollbar{width:5px}
 #feed::-webkit-scrollbar-thumb{background:#333;border-radius:4px}
-.ev{padding:3px 6px;border-radius:3px;margin-bottom:2px;white-space:pre-wrap;word-break:break-all}
-.ev.ok{background:#0a2a0a;color:#4caf50}
-.ev.heal{background:#2a1a0a;color:#ff8800}
-.ev.escalate{background:#2a0a0a;color:#ff0000}
-.ev.fail{background:#2a0a0a;color:#ef5350}
-.ev.hb{color:#444;font-style:italic}
+.ev{padding:8px 10px;border-radius:6px;margin-bottom:6px;white-space:pre-wrap;word-break:break-all;
+  animation:slideIn .4s ease-out;border-left:3px solid;font-weight:500}
+@keyframes slideIn{from{opacity:0;transform:translateY(-10px)}to{opacity:1;transform:translateY(0)}}
+.ev.ok{background:#0a3a0a;color:#4caf50;border-left-color:#4caf50}
+.ev.heal{background:#3a2a0a;color:#ffaa00;border-left-color:#ffaa00}
+.ev.escalate{background:#3a0a0a;color:#ff3333;border-left-color:#ff3333}
+.ev.fail{background:#3a0a0a;color:#ff5555;border-left-color:#ff5555}
+.ev.hb{color:#444;font-style:italic;background:transparent;border:none}
 /* Metrics column */
 .cards{display:flex;flex-direction:column;gap:10px;flex:1}
-.card{background:#1a1a35;border-radius:8px;padding:14px;text-align:center}
+.card{background:#1a1a35;border-radius:8px;padding:14px;text-align:center;border:1px solid #2a2a4a;transition:all .3s}
+.card:hover{border-color:#00e5ff;box-shadow:0 0 10px rgba(0,229,255,.2)}
 .card .label{font-size:.75rem;color:#666;text-transform:uppercase;margin-bottom:4px}
 .card .value{font-size:1.6rem;font-weight:700;color:#00e5ff}
 .card .value.green{color:#4caf50}
 .card .value.amber{color:#ffb74d}
 .actions-list{text-align:left;margin-top:8px;font-size:.8rem;line-height:1.8}
 .actions-list span{color:#00e5ff}
+.heals-counter{background:linear-gradient(135deg,#1a3a2a 0%,#0d2a1a 100%);border:1px solid #00aa66;
+  border-radius:8px;padding:12px;text-align:center;margin-bottom:8px;color:#00ff88;font-weight:700;
+  box-shadow:0 0 10px rgba(0,255,136,.3)}
+.heals-counter .num{font-size:1.8rem;color:#00ff88}
 </style>
 </head>
 <body>
 <div class="header">
   <h1><span class="dot"></span>NEUROSHIELD — LIVE BRAIN FEED</h1>
+  <div class="stat-line" id="heals-stat">🔧 Total Heals: —</div>
 </div>
 <div class="grid">
   <!-- Column 1: Architecture Pipeline -->
   <div class="col">
-    <h2>Architecture Pipeline</h2>
+    <h2>⚙️ Architecture Pipeline</h2>
     <div class="pipeline" id="pipeline">
-      <div class="stage active"><span class="num">1</span>Telemetry Collector<br><small>Jenkins + Prometheus + K8s</small></div>
+      <div class="stage active"><span class="num">1</span><span class="stage-icon">📡</span><div><b>Telemetry</b><br><small>Jenkins + Prometheus + K8s</small></div></div>
       <div class="arrow">▼</div>
-      <div class="stage"><span class="num">2</span>DistilBERT Log Encoder<br><small>Tokenise → embed → feature vector</small></div>
+      <div class="stage"><span class="num">2</span><span class="stage-icon">🧬</span><div><b>Log Encoding</b><br><small>DistilBERT → 768D → PCA → 16D</small></div></div>
       <div class="arrow">▼</div>
-      <div class="stage"><span class="num">3</span>Failure Predictor (PyTorch)<br><small>MLP ⇒ P(failure) 0-1</small></div>
+      <div class="stage"><span class="num">3</span><span class="stage-icon">🔮</span><div><b>Prediction</b><br><small>PyTorch NN: P(failure) ∈ [0,1]</small></div></div>
       <div class="arrow">▼</div>
-      <div class="stage"><span class="num">4</span>PPO RL Agent<br><small>Choose action: retry / restart / rollback / scale / clear / escalate</small></div>
+      <div class="stage"><span class="num">4</span><span class="stage-icon">🧠</span><div><b>PPO Agent</b><br><small>RL: 52D state → 6 actions</small></div></div>
       <div class="arrow">▼</div>
-      <div class="stage"><span class="num">5</span>Action Executor<br><small>kubectl · Jenkins API · alerts</small></div>
+      <div class="stage"><span class="num">5</span><span class="stage-icon">⚡</span><div><b>Executor</b><br><small>kubectl · Jenkins · Alerts</small></div></div>
       <div class="arrow">▼</div>
-      <div class="stage"><span class="num">6</span>Feedback Loop<br><small>Reward → retrain agent</small></div>
+      <div class="stage"><span class="num">6</span><span class="stage-icon">🔄</span><div><b>Feedback</b><br><small>Reward → Retrain Agent</small></div></div>
     </div>
   </div>
   <!-- Column 2: Live AI Feed -->
   <div class="col">
-    <h2>Live AI Feed</h2>
+    <h2>🎬 Live AI Feed</h2>
+    <div class="heals-counter"><div class="num" id="heals-num">0</div><small>Total Heals</small></div>
     <div id="feed"></div>
   </div>
   <!-- Column 3: Performance Metrics -->
   <div class="col">
-    <h2>Performance Metrics</h2>
+    <h2>📊 Performance Metrics</h2>
     <div class="cards" id="metrics">
       <div class="card"><div class="label">F1 Score</div><div class="value green" id="m-f1">—</div></div>
       <div class="card"><div class="label">AUC-ROC</div><div class="value green" id="m-auc">—</div></div>
@@ -236,14 +248,24 @@ body{background:#0d0d1a;color:#e0e0e0;font-family:'Segoe UI',system-ui,sans-seri
   </div>
 </div>
 <script>
-// SSE feed
+// SSE feed with enhanced event handling
 const feed = document.getElementById('feed');
 const es = new EventSource('/events');
+let totalHeals = 0;
+
 es.onmessage = e => {
   const d = JSON.parse(e.data);
   const div = document.createElement('div');
   div.className = 'ev ' + d.cls;
   div.textContent = d.msg;
+
+  // Count only successful heals (not heartbeats)
+  if (d.cls !== 'hb' && d.cls !== 'fail' && d.cls !== 'hb') {
+    totalHeals++;
+    document.getElementById('heals-num').textContent = totalHeals;
+    document.getElementById('heals-stat').textContent = `🔧 Total Heals: ${totalHeals}`;
+  }
+
   feed.appendChild(div);
   feed.scrollTop = feed.scrollHeight;
   // limit to 300 entries

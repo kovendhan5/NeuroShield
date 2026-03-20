@@ -3,7 +3,7 @@ IncidentBoard — Real-Time DevOps Incident Feed
 Monitored by NeuroShield AIOps Platform
 """
 
-from flask import Flask, jsonify, request, render_template_string
+from flask import Flask, jsonify, request, render_template_string, make_response
 import threading
 import time
 import random
@@ -203,7 +203,9 @@ body{background:#0d0d1a;color:#e0e0e0;font-family:'Segoe UI',system-ui,sans-seri
 a{color:#00ff88;text-decoration:none}
 
 /* Header */
-.header{display:flex;justify-content:space-between;align-items:center;padding:18px 32px;border-bottom:1px solid #2a2a4a}
+.header{display:flex;justify-content:space-between;align-items:center;padding:18px 32px;border-bottom:1px solid #2a2a4a;position:relative;overflow:hidden}
+.header::before{content:'';position:absolute;left:0;top:0;width:100%;height:100%;background:linear-gradient(90deg,transparent,rgba(0,255,136,0.05),transparent);animation:shimmer 3s infinite}
+@keyframes shimmer{0%{transform:translateX(-100%)}100%{transform:translateX(100%)}}
 .header-left{display:flex;align-items:center;gap:12px}
 .logo{font-size:1.5rem;font-weight:700;color:#00ff88}
 .tagline{font-size:.85rem;color:#888;margin-top:2px}
@@ -211,39 +213,52 @@ a{color:#00ff88;text-decoration:none}
 .pulse-dot{width:10px;height:10px;border-radius:50%;background:#00ff88;animation:pulse 1.5s infinite}
 @keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(0,255,136,.5)}50%{box-shadow:0 0 0 8px rgba(0,255,136,0)}}
 
+.clock{font-size:1rem;color:#00ff88;font-family:'Courier New',monospace;font-weight:600;letter-spacing:2px}
+
 /* Stats bar */
 .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;padding:24px 32px}
-.stat-card{background:#1a1a2e;border:1px solid #2a2a4a;border-radius:10px;padding:18px 20px;text-align:center}
-.stat-value{font-size:1.8rem;font-weight:700;color:#00ff88}
-.stat-label{font-size:.78rem;color:#888;margin-top:4px;text-transform:uppercase;letter-spacing:.5px}
+.stat-card{background:linear-gradient(135deg,#1a1a2e 0%,#16141f 100%);border:1px solid #2a3a4a;border-radius:10px;padding:18px 20px;text-align:center;position:relative;overflow:hidden;box-shadow:0 4px 10px rgba(0,255,136,0.1);transition:all .3s ease}
+.stat-card::before{content:'';position:absolute;top:0;left:0;width:100%;height:1px;background:linear-gradient(90deg,transparent,#00ff88,transparent);animation:glow-top 2s infinite}
+@keyframes glow-top{0%,100%{opacity:0}50%{opacity:1}}
+.stat-card:hover{transform:translateY(-3px);border-color:#00ff88;box-shadow:0 6px 15px rgba(0,255,136,0.2)}
+.stat-value{font-size:2rem;font-weight:700;color:#00ff88;font-variant-numeric:tabular-nums}
+.stat-label{font-size:.75rem;color:#888;margin-top:6px;text-transform:uppercase;letter-spacing:.5px}
 
 /* Feed */
 .feed{flex:1;padding:8px 32px 32px;display:flex;flex-direction:column;gap:12px}
 .feed-title{font-size:1rem;color:#888;margin-bottom:4px;text-transform:uppercase;letter-spacing:1px;font-weight:600}
 
-.incident-card{background:#1a1a2e;border:1px solid #2a2a4a;border-radius:10px;padding:16px 20px;display:flex;justify-content:space-between;align-items:center;transition:border-color .2s}
-.incident-card:hover{border-color:#3a3a5a}
-.card-left{display:flex;flex-direction:column;gap:6px}
+.incident-card{background:linear-gradient(135deg,#1a1a2e 0%,#151523 100%);border:1.5px solid #2a3a4a;border-radius:12px;padding:18px 22px;display:flex;justify-content:space-between;align-items:center;transition:all .3s ease;box-shadow:0 2px 8px rgba(0,0,0,0.3);position:relative;overflow:hidden}
+.incident-card::before{content:'';position:absolute;left:0;top:0;width:4px;height:100%;background:linear-gradient(to bottom,#3a3a5a,#2a2a4a)}
+.incident-card[data-severity="CRITICAL"] { border-color: #ff4444; }
+.incident-card[data-severity="CRITICAL"]::before { background: #ff4444; }
+.incident-card[data-severity="WARNING"] { border-color: #ff8800; }
+.incident-card[data-severity="WARNING"]::before { background: #ff8800; }
+.incident-card[data-severity="INFO"] { border-color: #0088ff; }
+.incident-card[data-severity="INFO"]::before { background: #0088ff; }
+.incident-card:hover{transform:translateX(6px);border-color:#00ff88;box-shadow:0 6px 16px rgba(0,255,136,0.2)}
+.card-left{display:flex;flex-direction:column;gap:6px;flex:1}
 .card-top{display:flex;align-items:center;gap:10px}
-.badge{font-size:.7rem;font-weight:700;padding:3px 10px;border-radius:6px;text-transform:uppercase;letter-spacing:.5px}
-.badge-CRITICAL{background:rgba(255,68,68,.13);border:1px solid #ff4444;color:#ff4444}
-.badge-WARNING{background:rgba(255,136,0,.13);border:1px solid #ff8800;color:#ff8800}
-.badge-INFO{background:rgba(0,136,255,.13);border:1px solid #0088ff;color:#0088ff}
-.card-title{font-size:.95rem;font-weight:500}
-.card-meta{font-size:.78rem;color:#666}
+.badge{font-size:.7rem;font-weight:700;padding:4px 12px;border-radius:8px;text-transform:uppercase;letter-spacing:.5px;box-shadow:0 2px 4px rgba(0,0,0,0.3)}
+.badge-CRITICAL{background:rgba(255,68,68,.2);border:1px solid #ff4444;color:#ff6666}
+.badge-WARNING{background:rgba(255,136,0,.2);border:1px solid #ff8800;color:#ffaa44}
+.badge-INFO{background:rgba(0,136,255,.2);border:1px solid #0088ff;color:#44ccff}
+.card-title{font-size:.95rem;font-weight:500;color:#f0f0f0}
+.card-meta{font-size:.78rem;color:#777}
 .card-right{flex-shrink:0;margin-left:16px}
-.btn-ack{background:transparent;border:1px solid #00ff88;color:#00ff88;padding:7px 18px;border-radius:7px;cursor:pointer;font-size:.78rem;font-weight:600;transition:all .2s}
-.btn-ack:hover{background:#00ff88;color:#0d0d1a}
+.btn-ack{background:transparent;border:1px solid #00ff88;color:#00ff88;padding:7px 18px;border-radius:7px;cursor:pointer;font-size:.78rem;font-weight:600;transition:all .2s;box-shadow:0 0 8px rgba(0,255,136,0.1)}
+.btn-ack:hover{background:#00ff88;color:#0d0d1a;box-shadow:0 0 16px rgba(0,255,136,0.4);transform:scale(1.05)}
 .status-badge{font-size:.75rem;padding:5px 14px;border-radius:7px;font-weight:600}
 .status-acknowledged{background:rgba(136,136,136,.15);border:1px solid #666;color:#999}
-.status-resolved{background:rgba(0,255,136,.1);border:1px solid #00ff88;color:#00ff88}
+.status-resolved{background:rgba(0,255,136,.15);border:1px solid #00ff88;color:#00ff88}
 
 /* Footer */
 .footer{text-align:center;padding:18px 32px;border-top:1px solid #2a2a4a;font-size:.78rem;color:#555}
 
 /* Crash screen */
-#crash-screen{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:linear-gradient(135deg,#1a0000,#330000);z-index:9999;justify-content:center;align-items:center;flex-direction:column;gap:30px}
+#crash-screen{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:linear-gradient(135deg,#1a0000,#330000);z-index:9999;justify-content:center;align-items:center;flex-direction:column;gap:30px;animation:fadeIn .3s ease}
 #crash-screen.visible{display:flex}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
 .crash-content{text-align:center}
 .crash-icon{font-size:6rem;margin-bottom:20px;animation:shake .1s infinite}
 @keyframes shake{0%,100%{transform:translate(0,0)}25%{transform:translate(-5px,0)}75%{transform:translate(5px,0)}}
@@ -251,14 +266,17 @@ a{color:#00ff88;text-decoration:none}
 .crash-message{font-size:1.2rem;color:#ff9999;margin-bottom:30px}
 .crash-blinking{animation:blink 1s infinite;font-size:1.1rem;color:#ffff00}
 @keyframes blink{0%,50%{opacity:1}51%,100%{opacity:.2}}
+.recovery-progress{width:300px;height:4px;background:rgba(255,255,255,.2);border-radius:2px;overflow:hidden}
+.recovery-bar{height:100%;background:linear-gradient(90deg,#ff6633,#ff3333);animation:progress 25s linear}
+@keyframes progress{0%{width:0}100%{width:100%}}
 
 /* Heal screen */
-#heal-screen{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:linear-gradient(135deg,#001a00,#003300);z-index:9999;justify-content:center;align-items:center;flex-direction:column;gap:30px}
+#heal-screen{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:linear-gradient(135deg,#001a00,#003300);z-index:9999;justify-content:center;align-items:center;flex-direction:column;gap:30px;animation:fadeIn .3s ease}
 #heal-screen.visible{display:flex}
 .heal-content{text-align:center}
 .heal-icon{font-size:6rem;margin-bottom:20px;animation:pulse-heal 1s infinite}
 @keyframes pulse-heal{0%,100%{transform:scale(1)}50%{transform:scale(1.1)}}
-.heal-title{font-size:3rem;color:#00ff00;font-weight:700;margin-bottom:10px;text-shadow:0 0 20px rgba(0,255,0,.5)}
+.heal-title{font-size:3rem;color:#00ff66;font-weight:700;margin-bottom:10px;text-shadow:0 0 20px rgba(0,255,102,.5)}
 .heal-message{font-size:1.2rem;color:#99ff99}
 
 /* Responsive */
@@ -273,6 +291,7 @@ a{color:#00ff88;text-decoration:none}
     <div class="crash-title">SERVICE DOWN</div>
     <div class="crash-message">IncidentBoard has crashed</div>
     <div class="crash-blinking">⏳ Waiting for NeuroShield to heal...</div>
+    <div class="recovery-progress"><div class="recovery-bar"></div></div>
   </div>
 </div>
 
@@ -289,6 +308,7 @@ a{color:#00ff88;text-decoration:none}
     <div><span class="logo">⚡ IncidentBoard</span><div class="tagline">Live DevOps Monitoring</div></div>
   </div>
   <div class="live-badge"><div class="pulse-dot"></div> LIVE</div>
+  <div class="clock" id="current-time">--:--:--</div>
 </div>
 
 <div class="stats">
@@ -314,6 +334,26 @@ function fmtUptime(ms){
   return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');
 }
 
+function updateClock(){
+  const now = new Date();
+  const h = String(now.getHours()).padStart(2,'0');
+  const m = String(now.getMinutes()).padStart(2,'0');
+  const s = String(now.getSeconds()).padStart(2,'0');
+  document.getElementById('current-time').textContent = h + ':' + m + ':' + s;
+}
+
+function animateCounter(element, targetText, duration=800){
+  if(isNaN(targetText)) { element.textContent = targetText; return; }
+  const target = parseInt(targetText);
+  const increment = Math.ceil(target / (duration/50));
+  let current = 0;
+  const timer = setInterval(()=>{
+    current += increment;
+    if(current >= target){ current = target; clearInterval(timer); }
+    element.textContent = current;
+  }, 50);
+}
+
 function renderIncidents(data){
   let openCount=0, resolvedCount=0, alertCount=0;
   data.forEach(i=>{
@@ -321,9 +361,14 @@ function renderIncidents(data){
     if(i.status==='resolved') resolvedCount++;
     if(i.status==='acknowledged') alertCount++;
   });
-  document.getElementById('stat-open').textContent=openCount;
-  document.getElementById('stat-resolved').textContent=resolvedCount;
-  document.getElementById('stat-alerts').textContent=alertCount;
+
+  const openEl = document.getElementById('stat-open');
+  const resolvedEl = document.getElementById('stat-resolved');
+  const alertEl = document.getElementById('stat-alerts');
+
+  if(openEl.textContent !== String(openCount)) animateCounter(openEl, openCount);
+  if(resolvedEl.textContent !== String(resolvedCount)) animateCounter(resolvedEl, resolvedCount);
+  if(alertEl.textContent !== String(alertCount)) animateCounter(alertEl, alertCount);
 
   const container=document.getElementById('incidents');
   container.innerHTML=data.map(i=>{
@@ -335,7 +380,7 @@ function renderIncidents(data){
     } else {
       actionHTML=`<span class="status-badge status-resolved">Resolved ✓</span>`;
     }
-    return `<div class="incident-card">
+    return `<div class="incident-card" data-severity="${i.severity}">
       <div class="card-left">
         <div class="card-top"><span class="badge badge-${i.severity}">${i.severity}</span><span class="card-title">${i.title}</span></div>
         <div class="card-meta">${i.service} &bull; ${i.time_ago}</div>
@@ -386,6 +431,10 @@ async function healthCheck(){
   }
 }
 
+// Update clock every second
+updateClock();
+setInterval(updateClock, 1000);
+
 // Uptime counter
 setInterval(()=>{
   document.getElementById('stat-uptime').textContent=fmtUptime(Date.now()-startTs);
@@ -404,7 +453,11 @@ setInterval(healthCheck,2000);
 
 @app.route("/", methods=["GET"])
 def index():
-    return render_template_string(HTML)
+    response = make_response(render_template_string(HTML))
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
