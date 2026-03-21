@@ -3,11 +3,15 @@ FROM python:3.11-slim
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+
+# Install with longer timeout and retries (prevents timeouts)
+RUN pip install --default-timeout=1000 --retries 5 -r requirements.txt
 
 COPY src/ src/
 COPY config/ config/
+COPY models/ models/ 2>/dev/null || true
+COPY data/ data/ 2>/dev/null || true
 
 EXPOSE 8502
 
-CMD ["python", "src/orchestrator/main.py"]
+CMD ["python", "-u", "src/orchestrator/main.py"]
