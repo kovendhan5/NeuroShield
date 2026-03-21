@@ -1,0 +1,12 @@
+# Force CPU-only builds to prevent massive GPU library downloads
+# This prevents pip from automatically upgrading to GPU versions
+
+# PyTorch - force CPU only (not GPU)
+# Note: transformers will pull torch, but these constraints prevent GPU variants
+nvidia-cuda-runtime==0  # Block CUDA runtime packages
+nvidia-cudnn==0  # Block cuDNN
+nvidia-cublas==0  # Block cuBLAS
+triton==0  # Block triton
+
+# Keep only what we actually need for inference
+torch<3  # Allow any torch 2.x but cap at major version
