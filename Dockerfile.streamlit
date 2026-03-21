@@ -4,7 +4,11 @@ WORKDIR /app
 
 COPY requirements.txt .
 
-# Install with very long timeout and higher retries
+# Pre-install PyTorch CPU-only to prevent GPU variant auto-install
+RUN pip install --default-timeout=2000 --retries 10 \
+    "torch>=2.0,<3" --index-url https://download.pytorch.org/whl/cpu
+
+# Install remaining dependencies
 RUN pip install --default-timeout=2000 --retries 10 --index-url https://pypi.org/simple/ -r requirements.txt
 
 COPY src/ src/

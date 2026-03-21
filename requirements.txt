@@ -7,9 +7,10 @@ numpy==1.26.4
 scikit-learn==1.5.2
 joblib==1.4.2
 
-# Lighter ML inference (no GPU/CUDA)
-# Using onnx for model inference instead of torch to reduce size
+# Lite ML inference (no GPU/CUDA - transformers brings torch automatically)
 transformers==4.45.1
+stable-baselines3==2.3.2  # RL policy for inference
+gymnasium==0.29.1  # RL dependency
 
 # Dashboard & Visualization
 streamlit==1.43.0
