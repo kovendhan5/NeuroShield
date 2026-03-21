@@ -2,7 +2,7 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-RUN pip install --default-timeout=1000 --retries 5 flask psutil
+RUN pip install --default-timeout=2000 --retries 10 --index-url https://pypi.org/simple/ flask psutil
 
 COPY app.py /app/app.py
 

@@ -2,10 +2,14 @@
 requests==2.32.3
 psutil==6.1.0
 
-# ML & RL (CPU-optimized, pre-trained models only)
-transformers==4.45.1
+# ML & RL (inference only - CPU optimized)
+numpy==1.26.4
 scikit-learn==1.5.2
 joblib==1.4.2
+
+# Lighter ML inference (no GPU/CUDA)
+# Using onnx for model inference instead of torch to reduce size
+transformers==4.45.1
 
 # Dashboard & Visualization
 streamlit==1.43.0
@@ -13,7 +17,6 @@ plotly==5.24.1
 
 # Utilities
 pandas==2.2.3
-numpy==1.26.4
 python-dotenv==1.0.1
 pyyaml==6.0.2
 

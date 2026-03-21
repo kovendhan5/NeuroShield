@@ -7,7 +7,7 @@ RUN apt-get update && apt-get install -y curl build-essential && apt-get clean &
 
 # Python dependencies
 COPY backend/requirements.txt .
-RUN pip install --upgrade pip setuptools wheel && pip install --default-timeout=1000 --retries 5 -r requirements.txt
+RUN pip install --upgrade pip setuptools wheel && pip install --default-timeout=2000 --retries 10 --index-url https://pypi.org/simple/ -r requirements.txt
 
 # Copy application
 COPY backend/app.py .
