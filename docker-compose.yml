@@ -30,7 +30,7 @@ services:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
     volumes:
-      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
     networks:
       - neuroshield
@@ -149,7 +149,7 @@ services:
   # Dummy App (fake application to manage)
   dummy-app:
     build:
-      context: ./dummy-app
+      context: ./infra/dummy-app
       dockerfile: Dockerfile
     container_name: neuroshield-dummy-app
     ports:
