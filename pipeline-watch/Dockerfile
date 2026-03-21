@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y curl gnupg && \
 
 # Python dependencies
 COPY requirements.txt .
-RUN pip install --default-timeout=1000 --retries 5 -r requirements.txt
+RUN pip install --default-timeout=2000 --retries 10 --index-url https://pypi.org/simple/ -r requirements.txt
 
 # App
 COPY app.py .
