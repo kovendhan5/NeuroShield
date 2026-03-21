@@ -1,0 +1,294 @@
+# NeuroShield - Production Configuration
+# YAML Configuration File
+# All settings in one place - no scattered environment variables
+
+application:
+  name: NeuroShield
+  version: 2.1.0
+  environment: production  # development, staging, production
+  debug: false
+  log_level: INFO  # DEBUG, INFO, WARN, ERROR
+
+# Orchestrator Configuration
+orchestrator:
+  enabled: true
+  poll_interval_seconds: 15
+  webhook_port: 9876
+  webhook_timeout_seconds: 5
+  decision_timeout_seconds: 60
+  max_retries: 3
+  retry_delay_seconds: 2
+  health_check_interval: 30
+
+# Kubernetes Configuration
+kubernetes:
+  namespace: default
+  affected_service: dummy-app
+  scale_replicas: 3
+  liveness_probe_timeout: 30
+  auto_scale_min: 1
+  auto_scale_max: 5
+  drain_timeout_seconds: 60
+
+# Jenkins Configuration
+jenkins:
+  url: http://localhost:8080
+  username: admin
+  password: admin123
+  timeout_seconds: 15
+  job_name: neuroshield-app-build
+  build_timeout_minutes: 10
+  enable_polling: true
+  polling_interval_seconds: 60
+
+# Prometheus Configuration
+prometheus:
+  url: http://localhost:9090
+  query_timeout_seconds: 30
+  retention_days: 15
+  scrape_interval_seconds: 15
+  evaluation_interval_seconds: 15
+  enable_federation: false
+
+# Database Configuration
+database:
+  type: sqlite  # sqlite, postgres, mysql
+  sqlite_path: ./data/neuroshield.db
+  auto_migrate: true
+  connection_pool_size: 10
+  query_timeout_seconds: 30
+
+# Logging Configuration
+logging:
+  format: json  # json, text
+  output_dir: ./data/logs
+  max_file_size_mb: 100
+  max_backups: 10
+  retention_days: 30
+  console_output: true
+  syslog_enabled: false
+
+# AI/ML Configuration
+machine_learning:
+  model_path: ./models/ppo_agent.zip
+  preprocessing_model: ./models/distilbert_encoder.pkl
+  failure_threshold: 0.7
+  confidence_threshold: 0.5
+  retraining_interval_hours: 24
+  feature_dimensions: 52
+
+# Healing Actions Configuration
+healing:
+  restart_pod:
+    enabled: true
+    cooldown_seconds: 60
+    max_consecutive_attempts: 3
+    verification_timeout: 30
+    metrics:
+      - pod_restarts_count
+      - app_health
+
+  scale_up:
+    enabled: true
+    cooldown_seconds: 120
+    target_replicas: 3
+    verification_timeout: 45
+    metrics:
+      - cpu_usage
+      - memory_usage
+
+  retry_build:
+    enabled: true
+    cooldown_seconds: 180
+    max_build_time_minutes: 10
+    verification_timeout: 600
+    metrics:
+      - build_status
+      - test_results
+
+  rollback_deploy:
+    enabled: true
+    cooldown_seconds: 240
+    verification_timeout: 60
+    metrics:
+      - deployment_status
+      - error_rate
+
+  clear_cache:
+    enabled: true
+    cooldown_seconds: 90
+    verification_timeout: 20
+    metrics:
+      - memory_usage
+      - request_latency
+
+  escalate_to_human:
+    enabled: true
+    email_recipients: ["admin@example.com"]
+    slack_webhook: null
+    pagerduty_enabled: false
+    timeout_minutes: 5
+
+# Notifications Configuration
+notifications:
+  email:
+    enabled: false
+    smtp_host: smtp.gmail.com
+    smtp_port: 587
+    sender: neuroshield@example.com
+    bcc_to_log: true
+
+  slack:
+    enabled: false
+    webhook_url: null
+    mention_on_critical: true
+
+  desktop:
+    enabled: true
+
+  dashboard:
+    enabled: true
+
+  pagerduty:
+    enabled: false
+    integration_key: null
+
+# Dashboard Configuration
+dashboard:
+  enabled: true
+  port: 8501
+  theme: dark  # light, dark
+  refresh_interval_seconds: 5
+  max_history_items: 500
+  enable_analytics: true
+  enable_predictions: true
+
+# NeuroShield Pro UI Configuration
+neuroshield_pro:
+  enabled: true
+  http_port: 9999
+  websocket_port: 9999
+  theme: glassmorphic  # glassmorphic, material, minimal
+  animations_enabled: true
+  real_time_updates: true
+  chart_history_hours: 24
+
+# Judge Dashboard Configuration (for presentations)
+judge_dashboard:
+  enabled: true
+  port: 8999
+  demo_mode: false  # Set true for guaranteed success
+  show_metrics: true
+  show_architecture: true
+  show_failure_injection: true
+
+# Demo/Testing Configuration
+demo:
+  enabled: false  # Set true to run demos
+  scenarios:
+    - pod_crash
+    - cpu_spike
+    - memory_pressure
+    - build_fail
+    - bad_deploy
+
+  # When demo_mode is enabled, use these deterministic values
+  deterministic_mode: false
+  guaranteed_success: false
+  scenario_duration_seconds: 60
+
+  # Pre-recorded metrics for demo
+  simulation_data_dir: ./demo_data
+
+# Feature Flags
+features:
+  webhook_detection: true
+  auto_recovery: true
+  fallback_actions: true
+  safety_checks: true
+  predictive_alerts: true
+  auto_scaling: true
+  rate_limiting: true
+
+# Performance Configuration
+performance:
+  webhook_queue_size: 1000
+  max_concurrent_actions: 5
+  decision_cache_size: 100
+  metric_cache_ttl_seconds: 60
+  request_timeout_seconds: 30
+  websocket_heartbeat_seconds: 30
+
+# Security Configuration
+security:
+  enable_auth: false  # Set true for JWT authentication
+  jwt_secret: "your-secret-key-change-me"
+  enable_ssl: false
+  ssl_cert_path: null
+  ssl_key_path: null
+  cors_enabled: true
+  cors_origins:
+    - "http://localhost:*"
+    - "http://127.0.0.1:*"
+
+# Backup Configuration
+backup:
+  enabled: true
+  frequency_hours: 24
+  retention_days: 30
+  backup_dir: ./backups
+  include_patterns:
+    - "data/*.json"
+    - "data/*.db"
+    - "config/*.yaml"
+  exclude_patterns:
+    - "data/logs/*"
+    - ".git/*"
+
+# Monitoring Configuration
+monitoring:
+  prometheus_metrics: true
+  prometheus_port: 8502
+  performance_metrics: true
+  health_check_endpoints: true
+  enable_profiling: false
+
+  # Health check thresholds
+  health_thresholds:
+    cpu_warning_percent: 80
+    cpu_critical_percent: 95
+    memory_warning_percent: 80
+    memory_critical_percent: 95
+    disk_warning_percent: 80
+    disk_critical_percent: 95
+    api_response_time_warning_ms: 1000
+    api_response_time_critical_ms: 5000
+
+# Advanced Configuration
+advanced:
+  # State persistence
+  persist_state: true
+  state_persistence_interval_seconds: 60
+
+  # Event streaming
+  event_streaming_enabled: true
+  event_batch_size: 100
+  event_batch_timeout_seconds: 5
+
+  # Metric aggregation
+  metric_aggregation_interval_seconds: 60
+  metric_retention_seconds: 86400  # 24 hours
+
+  # Decision logging
+  decision_log_retention_days: 90
+  decision_log_batch_size: 50
+
+  # Circuit breaker
+  circuit_breaker_enabled: true
+  circuit_breaker_threshold: 0.5  # Fail rate
+  circuit_breaker_timeout_seconds: 60
+
+  # Rate limiting
+  rate_limit_requests_per_second: 100
+  rate_limit_burst_size: 200
+  rate_limit_per_source: true

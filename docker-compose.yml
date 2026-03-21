@@ -1,34 +1,180 @@
+version: '3.9'
+
 services:
+  # Jenkins - CI/CD
   jenkins:
-    image: jenkins/jenkins:lts-jdk17
+    image: jenkins/jenkins:lts
     container_name: neuroshield-jenkins
     ports:
       - "8080:8080"
       - "50000:50000"
+    environment:
+      JENKINS_ADMIN_ID: admin
+      JENKINS_ADMIN_PASS: admin123
     volumes:
       - jenkins_home:/var/jenkins_home
-    environment:
-      - JAVA_OPTS=-Xmx512m -Xms256m -Djenkins.install.runSetupWizard=false
-    restart: unless-stopped
+    networks:
+      - neuroshield
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8080/login || exit 1"]
+      test: ["CMD", "curl", "-f", "http://localhost:8080/"]
       interval: 30s
       timeout: 10s
-      retries: 5
+      retries: 3
+    restart: unless-stopped
 
+  # Prometheus - Metrics
   prometheus:
     image: prom/prometheus:latest
     container_name: neuroshield-prometheus
     ports:
       - "9090:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
     volumes:
-      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-    restart: unless-stopped
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - neuroshield
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:9090/-/healthy || exit 1"]
+      test: ["CMD", "curl", "-f", "http://localhost:9090/-/healthy"]
       interval: 30s
       timeout: 10s
       retries: 3
+    restart: unless-stopped
+
+  # Grafana - Dashboards
+  grafana:
+    image: grafana/grafana:latest
+    container_name: neuroshield-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks:
+      - neuroshield
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # NeuroShield Orchestrator
+  orchestrator:
+    build:
+      context: .
+      dockerfile: Dockerfile.orchestrator
+    container_name: neuroshield-orchestrator
+    environment:
+      PYTHONUNBUFFERED: 1
+      CONFIG_FILE: /app/config/neuroshield.yaml
+      DATABASE_URL: sqlite:////app/data/neuroshield.db
+      JENKINS_URL: http://jenkins:8080
+      JENKINS_USERNAME: admin
+      JENKINS_PASSWORD: admin123
+      PROMETHEUS_URL: http://prometheus:9090
+      LOG_LEVEL: INFO
+    volumes:
+      - ./config:/app/config
+      - ./data:/app/data
+      - ./src:/app/src
+      - ./models:/app/models
+    depends_on:
+      - jenkins
+      - prometheus
+    ports:
+      - "8502:8502"
+    networks:
+      - neuroshield
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8502/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # Dashboard - Streamlit
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.streamlit
+    container_name: neuroshield-dashboard
+    ports:
+      - "8501:8501"
+    environment:
+      CONFIG_FILE: /app/config/neuroshield.yaml
+      ORCHESTRATOR_URL: http://orchestrator:8502
+    volumes:
+      - ./config:/app/config
+      - ./data:/app/data
+      - ./src:/app/src
+    depends_on:
+      - orchestrator
+    networks:
+      - neuroshield
+    restart: unless-stopped
+
+  # NeuroShield Pro UI
+  neuroshield-pro:
+    build:
+      context: ./neuroshield-pro
+      dockerfile: Dockerfile
+    container_name: neuroshield-pro
+    ports:
+      - "9999:9999"
+      - "8888:8888"
+    environment:
+      CONFIG_FILE: /app/config/neuroshield.yaml
+      ORCHESTRATOR_URL: http://orchestrator:8502
+      PROMETHEUS_URL: http://prometheus:9090
+    volumes:
+      - ./config:/app/config
+      - ./data:/app/data
+      - ./neuroshield-pro:/app
+    depends_on:
+      - orchestrator
+    networks:
+      - neuroshield
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9999/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # Dummy App (fake application to manage)
+  dummy-app:
+    build:
+      context: ./dummy-app
+      dockerfile: Dockerfile
+    container_name: neuroshield-dummy-app
+    ports:
+      - "5000:5000"
+    environment:
+      FLASK_ENV: production
+      LOG_FILE: /app/data/app.log
+    volumes:
+      - ./data:/app/data
+    networks:
+      - neuroshield
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+networks:
+  neuroshield:
+    driver: bridge
 
 volumes:
   jenkins_home:
+  prometheus_data:
+  grafana_data:
