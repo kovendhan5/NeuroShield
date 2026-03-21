@@ -1,0 +1,81 @@
+=== NEUROSHIELD CLEANUP PLAN ===
+
+PHASE 1: REMOVE OBSOLETE FILES
+===============================
+
+1. DELETE: incident-board/ directory (entire, replaced by pipeline-watch)
+   - incident-board/Dockerfile
+   - incident-board/app.py
+   - incident-board/requirements.txt
+   - incident-board/__pycache__/
+   
+2. DELETE: Root duplicate startup scripts
+   - start_neuroshield.bat (duplicate of start-neuroshield.bat)
+   - start_neuroshield.sh (use scripts/launcher instead)
+   - neuroshield.cmd (use run.py or scripts/launcher)
+   
+3. DELETE: Build artifacts & empty files
+   - $null (build artifact)
+   - demo_data/ (empty directory)
+   - docs/paper_summary.md (0 bytes)
+
+4. DELETE: Duplicate status .txt files
+   - ANALYSIS_SUMMARY.txt
+   - COMPLETE_STATUS.txt
+   - FINAL_STATUS.txt
+   - FINAL_DELIVERY_SUMMARY.txt
+   - START_HERE.txt
+
+PHASE 2: ARCHIVE DOCUMENTATION
+===============================
+
+1. CREATE: docs/archive/COMPLETED_REPORTS/
+2. MOVE: All project status/completion reports to archive/COMPLETED_REPORTS/
+   - RUNTIME_ANALYSIS_REPORT.md
+   - README_MASTER.md
+   - CAPSTONE_PROJECT_UPGRADE.md
+   - PROJECT_CLEANUP_PLAN.md
+   - ENHANCEMENT_COMPLETE_10_OUT_OF_10.md
+   - DELIVERY_SUMMARY.md
+   - PROJECT_STATUS_FINAL.md
+   - PROJECT_STATUS.md
+   - INTEGRATION_GUIDE.md
+   - SYSTEM_VERIFICATION_REPORT.md
+   - NEUROSHIELD_PRO_QUICKSTART.md
+   - WINDOWS_QUICKSTART.md
+   - CLEANUP_COMPLETION_REPORT.md
+   - IMPLEMENTATION_COMPLETE.md
+   - DISK_USAGE_ANALYSIS.md
+   - ANALYSIS.md
+   - FIXED_STARTUP.md
+   - ANALYSIS_COMPLETE_5PHASES.md
+
+PHASE 3: REORGANIZE PROJECT STRUCTURE
+=====================================
+
+1. CREATE: infra/k8s/ directory
+   MOVE TO: infra/k8s/
+   - dummy-app.yaml
+   - jenkins-local-updated.yaml
+   - k8s-minimal.yaml
+   - jenkins-pvc.yaml
+
+2. CONSOLIDATE: Python utility scripts
+   MOVE: scripts/infra/setup_jenkins_job.py (if not already there)
+   MOVE: scripts/launcher/serve_ui.py (if not already there)
+   KEEP: run.py at root (main entry point)
+
+3. KEEP IN ROOT:
+   - run.py (main entry point)
+   - docker-compose.yml
+   - .env, .env.example
+   - requirements.txt
+   - pytest.ini
+   
+4. ACTIVE DOCS IN ROOT:
+   - README.md
+   - QUICKSTART.md
+   - SECURITY.md
+   - START_HERE.md
+
+RESULT: Clean, organized project with improved maintainability
