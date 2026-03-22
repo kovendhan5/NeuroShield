@@ -1,0 +1,160 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker-service
+  namespace: neuroshield-prod
+  labels:
+    app: worker
+    version: v1
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app: worker
+  template:
+    metadata:
+      labels:
+        app: worker
+        version: v1
+    spec:
+      containers:
+      - name: worker
+        image: python:3.11-slim
+        imagePullPolicy: IfNotPresent
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            pip install redis psycopg2-binary prometheus-client --quiet
+            python3 << 'PYEOF'
+            import os
+            import time
+            import random
+            import redis
+            import psycopg2
+            from prometheus_client import Counter, Gauge, start_http_server
+            
+            # Metrics
+            jobs_processed = Counter('worker_jobs_processed_total', 'Total jobs processed')
+            jobs_failed = Counter('worker_jobs_failed_total', 'Total jobs failed')
+            queue_size = Gauge('worker_queue_size', 'Current job queue size')
+            
+            # Start metrics server
+            start_http_server(9091)
+            
+            # Database connection
+            try:
+                conn = psycopg2.connect(
+                    host=os.getenv('DATABASE_HOST', 'postgres-service'),
+                    user=os.getenv('DATABASE_USER', 'admin'),
+                    password=os.getenv('DATABASE_PASSWORD', 'secure_postgres_pass_123'),
+                    database=os.getenv('DATABASE_NAME', 'neuroshield_db')
+                )
+                print("[WORKER] Database connected")
+            except Exception as e:
+                print(f"[WORKER] Database connection failed: {e}")
+            
+            # Redis connection
+            try:
+                r = redis.Redis(host=os.getenv('REDIS_HOST', 'redis-service'), port=6379)
+                r.ping()
+                print("[WORKER] Redis connected")
+            except Exception as e:
+                print(f"[WORKER] Redis connection failed: {e}")
+            
+            print("[WORKER] Starting job processing...")
+            
+            while True:
+                try:
+                    # Simulate job processing
+                    queue_size.set(random.randint(0, 10))
+                    
+                    # Process job
+                    job_id = f"job_{int(time.time())}"
+                    processing_time = random.uniform(0.5, 3.0)
+                    
+                    print(f"[WORKER] Processing {job_id} (takes {processing_time:.1f}s)")
+                    time.sleep(processing_time)
+                    
+                    # Random failure (10% chance)
+                    if random.random() < 0.10:
+                        jobs_failed.inc()
+                        print(f"[WORKER] Job {job_id} FAILED")
+                    else:
+                        jobs_processed.inc()
+                        print(f"[WORKER] Job {job_id} completed successfully")
+                    
+                    time.sleep(random.uniform(1, 3))
+                    
+                except Exception as e:
+                    print(f"[WORKER] Error: {e}")
+                    time.sleep(5)
+            PYEOF
+        ports:
+        - name: metrics
+          containerPort: 9091
+        env:
+        - name: DATABASE_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: neuroshield-config
+              key: DATABASE_HOST
+        - name: DATABASE_NAME
+          valueFrom:
+            configMapKeyRef:
+              name: neuroshield-config
+              key: DATABASE_NAME
+        - name: DATABASE_USER
+          value: "admin"
+        - name: DATABASE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgres-secret
+              key: password
+        - name: REDIS_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: neuroshield-config
+              key: REDIS_HOST
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - ps aux | grep python | grep -v grep > /dev/null
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        startupProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - ps aux | grep python | grep -v grep > /dev/null
+          failureThreshold: 30
+          periodSeconds: 10
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: worker-service
+  namespace: neuroshield-prod
+  labels:
+    app: worker
+spec:
+  type: ClusterIP
+  selector:
+    app: worker
+  ports:
+  - name: metrics
+    port: 9091
+    targetPort: 9091

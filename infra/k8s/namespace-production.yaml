@@ -1,0 +1,38 @@
+---
+# Production Namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: neuroshield-prod
+  labels:
+    name: neuroshield-prod
+    environment: production
+
+---
+# ConfigMap for shared config
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: neuroshield-config
+  namespace: neuroshield-prod
+data:
+  APP_ENV: "production"
+  LOG_LEVEL: "INFO"
+  REPLICA_COUNT: "3"
+  DATABASE_HOST: "postgres-service"
+  DATABASE_PORT: "5432"
+  DATABASE_NAME: "neuroshield_db"
+  REDIS_HOST: "redis-service"
+  REDIS_PORT: "6379"
+  PROMETHEUS_ENABLED: "true"
+  METRICS_PORT: "9090"
+
+---
+# Storage Class (for persistent data)
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: fast-ssd
+provisioner: k8s.io/minikube-hostpath
+parameters:
+  type: pd-ssd
