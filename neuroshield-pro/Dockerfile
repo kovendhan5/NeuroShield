@@ -11,7 +11,11 @@ RUN pip install --upgrade pip setuptools wheel && pip install --default-timeout=
 
 # Copy application
 COPY backend/app.py .
+COPY backend/judge_routes.py .
 COPY frontend/public ./templates/public
+
+# Verify files exist
+RUN ls -la /app/
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
@@ -19,4 +23,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 
 EXPOSE 8888
 
-CMD ["python", "app.py"]
+CMD ["python", "-u", "app.py"]

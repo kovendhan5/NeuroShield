@@ -145,6 +145,8 @@ services:
       timeout: 10s
       retries: 3
     restart: unless-stopped
+    profiles:
+      - pro
 
   # Dummy App (fake application to manage)
   dummy-app:
