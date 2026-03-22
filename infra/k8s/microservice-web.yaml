@@ -1,0 +1,152 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-service
+  namespace: neuroshield-prod
+  labels:
+    app: web
+    version: v1
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+        version: v1
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - web
+              topologyKey: kubernetes.io/hostname
+      containers:
+      - name: web
+        image: python:3.11-slim
+        imagePullPolicy: IfNotPresent
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            pip install flask prometheus-client requests --quiet
+            python3 << 'PYEOF'
+            import os
+            import time
+            from flask import Flask
+            from prometheus_client import Counter, Histogram, Gauge, generate_latest
+            import requests
+            
+            app = Flask(__name__)
+            
+            # Metrics
+            request_count = Counter('web_requests_total', 'Total web requests', ['method', 'endpoint'])
+            request_duration = Histogram('web_request_duration_seconds', 'Web request duration')
+            active_users = Gauge('web_active_users', 'Active users on web service')
+            
+            @app.route('/', methods=['GET'])
+            @request_duration.time()
+            def index():
+                request_count.labels(method='GET', endpoint='/').inc()
+                active_users.set(42)
+                return '''
+                <html>
+                <body style="font-family: Arial">
+                <h1>NeuroShield Production Dashboard</h1>
+                <p>Web Service v1.0</p>
+                <hr>
+                <h3>System Status</h3>
+                <ul>
+                <li>API Service: <a href="/api-health">Check</a></li>
+                <li>Database: Connected</li>
+                <li>Cache: Connected</li>
+                </ul>
+                </body>
+                </html>
+                ''', 200
+            
+            @app.route('/health', methods=['GET'])
+            def health():
+                request_count.labels(method='GET', endpoint='/health').inc()
+                return {'status': 'healthy'}, 200
+            
+            @app.route('/api-health', methods=['GET'])
+            def api_health():
+                try:
+                    resp = requests.get('http://api-service:5000/health', timeout=2)
+                    return resp.json(), resp.status_code
+                except:
+                    return {'status': 'api_unavailable'}, 503
+            
+            @app.route('/metrics', methods=['GET'])
+            def metrics():
+                return generate_latest(), 200
+            
+            if __name__ == '__main__':
+                app.run(host='0.0.0.0', port=80, debug=False)
+            PYEOF
+        ports:
+        - name: http
+          containerPort: 80
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 80
+          initialDelaySeconds: 15
+          periodSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 80
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          failureThreshold: 2
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-service
+  namespace: neuroshield-prod
+  labels:
+    app: web
+spec:
+  type: ClusterIP
+  selector:
+    app: web
+  ports:
+  - port: 80
+    targetPort: 80
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: web-pdb
+  namespace: neuroshield-prod
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: web

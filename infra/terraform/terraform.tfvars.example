@@ -1,0 +1,25 @@
+# Terraform Variables for Production
+# DO NOT COMMIT THIS FILE (add to .gitignore)
+# Generate PostgreSQL password: openssl rand -base64 32
+
+resource_group_name = "rg-neuroshield-prod"
+location            = "East US"
+environment         = "production"
+
+cluster_name    = "aks-neuroshield-prod"
+node_count      = 1
+min_node_count  = 1
+max_node_count  = 3
+vm_size         = "Standard_B3s"
+
+registry_name = "acrneuroshieldprod"
+registry_sku  = "Basic"
+
+postgres_server_name = "psql-neuroshield-prod"
+postgres_admin_user  = "dbadmin"
+# CHANGE THIS: Generate with: openssl rand -base64 32
+postgres_admin_password = "CHANGEME_GENERATE_STRONG_PASSWORD"
+postgres_database_name  = "neuroshield"
+
+redis_cache_name = "redis-neuroshield-prod"
+keyvault_name    = "kv-neuroshield-prod-001"  # Globally unique, add random suffix
