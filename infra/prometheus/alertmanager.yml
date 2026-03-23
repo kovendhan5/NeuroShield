@@ -1,6 +1,5 @@
 global:
   resolve_timeout: 5m
-  slack_api_url: ''  # Add your Slack webhook if desired
 
 route:
   group_by: [alertname, cluster, service]
@@ -19,14 +18,10 @@ route:
 
 receivers:
   - name: 'default'
-    # Add notification integrations here (email, webhook, etc.)
 
   - name: 'critical'
-    # Critical alerts - immediate notification
-    # Example: Slack, PagerDuty, etc.
 
   - name: 'warning'
-    # Warning alerts - can be batched
 
 inhibit_rules:
   - source_match:
@@ -34,3 +29,4 @@ inhibit_rules:
     target_match:
       severity: 'warning'
     equal: [alertname, dev, instance]
+

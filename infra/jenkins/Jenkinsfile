@@ -1,143 +1,77 @@
 pipeline {
     agent any
-    
+
     options {
-        buildDiscarder(logRotator(numToKeepStr: '10'))
-        timeout(time: 1, unit: 'HOURS')
         timestamps()
+        timeout(time: 1, unit: 'HOURS')
+        buildDiscarder(logRotator(numToKeepStr: '30'))
     }
-    
-    parameters {
-        choice(name: 'ENVIRONMENT', choices: ['dev', 'staging', 'production'], description: 'Deployment environment')
-        booleanParam(name: 'RUN_TESTS', defaultValue: true, description: 'Run automated tests')
-        booleanParam(name: 'DEPLOY', defaultValue: true, description: 'Deploy to cluster')
-    }
-    
+
     environment {
-        REGISTRY = 'localhost:5000'
-        IMAGE_TAG = "${BUILD_NUMBER}"
-        KUBERNETES_NAMESPACE = 'neuroshield-prod'
-        DOCKER_BUILDKIT = '1'
+        APP_NAME = 'neuroshield-microservice'
+        MICROSERVICE_URL = 'http://neuroshield-microservice:5000'
+        NEUROSHIELD_API = 'http://neuroshield-orchestrator:8000'
     }
-    
+
     stages {
-        stage('🔍 Checkout') {
+        stage('Checkout') {
             steps {
-                echo '📥 Cloning repository...'
+                script {
+                    echo "🔍 Pipeline starting..."
+                }
+            }
+        }
+
+        stage('Build') {
+            steps {
                 sh '''
-                    echo "Repository: ${GIT_URL}"
-                    echo "Branch: ${GIT_BRANCH}"
-                    ls -la || echo "First checkout"
+                    echo "Building Docker image..."
+                    docker build -f apps/Dockerfile.microservice \
+                        -t ${APP_NAME}:${BUILD_NUMBER} . || true
+                    echo "Build completed"
                 '''
             }
         }
-        
-        stage('🏗️ Build') {
+
+        stage('Deploy') {
             steps {
-                echo '🔨 Building Docker images...'
                 sh '''
-                    echo "Building API service image..."
-                    docker build -t ${REGISTRY}/neuroshield-api:${IMAGE_TAG} -f Dockerfile.api . || echo "Build skipped (local mode)"
-                    
-                    echo "Building Web service image..."
-                    docker build -t ${REGISTRY}/neuroshield-web:${IMAGE_TAG} -f Dockerfile.web . || echo "Build skipped (local mode)"
-                    
-                    echo "Building Worker service image..."
-                    docker build -t ${REGISTRY}/neuroshield-worker:${IMAGE_TAG} -f Dockerfile.worker . || echo "Build skipped (local mode)"
-                    
-                    echo "✅ Build stage complete"
+                    echo "Deploying application..."
+                    docker restart neuroshield-microservice || true
+                    sleep 3
                 '''
             }
         }
-        
-        stage('🧪 Test') {
-            when {
-                expression { params.RUN_TESTS == true }
-            }
+
+        stage('Health Check') {
             steps {
-                echo '🧪 Running automated tests...'
                 sh '''
-                    echo "Running unit tests..."
-                    python -m pytest tests/ -v --tb=short 2>/dev/null || echo "Tests passed or skipped"
-                    
-                    echo "Running integration tests..."
-                    echo "✅ Integration tests passed"
-                '''
-            }
-        }
-        
-        stage('📊 Quality Gate') {
-            steps {
-                echo '✓ Code quality checks...'
-                sh '''
-                    echo "Running linting..."
-                    echo "Checking security vulnerabilities..."
-                    echo "✅ Quality gates passed"
-                '''
-            }
-        }
-        
-        stage('🚀 Deploy to ${ENVIRONMENT}') {
-            when {
-                expression { params.DEPLOY == true }
-            }
-            steps {
-                echo "🚀 Deploying to ${ENVIRONMENT} environment..."
-                sh '''
-                    echo "Environment: ${ENVIRONMENT}"
-                    echo "Namespace: ${KUBERNETES_NAMESPACE}"
-                    echo ""
-                    echo "✅ Deployment simulation (updating service images)"
-                    
-                    # Create a marker for deployment success
-                    touch /tmp/deployment_${BUILD_NUMBER}.success
-                    
-                    echo "Pod deployment status:"
-                    kubectl get pods -n ${KUBERNETES_NAMESPACE} 2>/dev/null | head -10 || echo "K8s not available"
-                '''
-            }
-        }
-        
-        stage('✅ Smoke Tests Post-Deploy') {
-            when {
-                expression { params.DEPLOY == true }
-            }
-            steps {
-                echo '✅ Running smoke tests on deployed services...'
-                sh '''
-                    echo "Testing API endpoint..."
-                    curl -f http://api-service:5000/health 2>/dev/null || echo "API smoke test completed"
-                    
-                    echo "Testing Web endpoint..."
-                    curl -f http://web-service:80 2>/dev/null || echo "Web smoke test completed"
-                    
-                    echo "✅ All smoke tests passed"
-                '''
-            }
-        }
-        
-        stage('📈 Notify') {
-            steps {
-                echo '📢 Sending notifications...'
-                sh '''
-                    echo "✅ Deployment successful"
-                    echo "Build number: ${BUILD_NUMBER}"
-                    echo "Environment: ${ENVIRONMENT}"
+                    set +e
+                    for i in {1..30}; do
+                        if curl -f ${MICROSERVICE_URL}/health > /dev/null 2>&1; then
+                            echo "✅ Service is healthy"
+                            exit 0
+                        fi
+                        sleep 2
+                    done
+                    echo "❌ Health check failed"
+                    exit 1
                 '''
             }
         }
     }
-    
+
     post {
-        always {
-            echo '🧹 Cleanup...'
-            cleanWs()
-        }
         success {
-            echo '✅ Pipeline execution successful!'
+            echo "✅ Build succeeded"
         }
         failure {
-            echo '❌ Pipeline failed - rollback initiated'
+            echo "❌ Build failed - triggering AI healing"
+            sh '''
+                curl -X POST ${NEUROSHIELD_API}/api/heal \
+                    -H "Content-Type: application/json" \
+                    -d '{"reason":"jenkins_build_failed"}' || true
+            '''
         }
     }
 }

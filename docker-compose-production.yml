@@ -1,0 +1,237 @@
+version: '3.8'
+
+services:
+  # ===== INFRASTRUCTURE LAYER =====
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: neuroshield-postgres
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: neuroshield_db_pass
+      POSTGRES_DB: neuroshield_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - neuroshield-prod
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: neuroshield-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - neuroshield-prod
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ===== MONITORING STACK =====
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: neuroshield-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+    networks:
+      - neuroshield-prod
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: neuroshield-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin123
+      GF_SECURITY_ADMIN_USER: admin
+      GF_PATHS_PROVISIONING: /etc/grafana/provisioning
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+    networks:
+      - neuroshield-prod
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  alertmanager:
+    image: prom/alertmanager:latest
+    container_name: neuroshield-alertmanager
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./infra/prometheus/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+    networks:
+      - neuroshield-prod
+    restart: unless-stopped
+
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: neuroshield-node-exporter
+    ports:
+      - "9100:9100"
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    networks:
+      - neuroshield-prod
+    restart: unless-stopped
+
+  # ===== CI/CD =====
+
+  jenkins:
+    image: jenkins/jenkins:lts-alpine
+    container_name: neuroshield-jenkins
+    user: root
+    ports:
+      - "8080:8080"
+      - "50000:50000"
+    environment:
+      JENKINS_HOME: /var/jenkins_home
+    volumes:
+      - jenkins_data:/var/jenkins_home
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - neuroshield-prod
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/api/json || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ===== REAL MICROSERVICE APPLICATION =====
+
+  microservice:
+    build:
+      context: .
+      dockerfile: apps/Dockerfile.microservice
+    container_name: neuroshield-microservice
+    ports:
+      - "5000:5000"
+    environment:
+      DATABASE_URL: postgresql://admin:neuroshield_db_pass@postgres:5432/neuroshield_db
+      REDIS_URL: redis://redis:6379
+      FLASK_ENV: production
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - neuroshield-prod
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ===== NEUROSHIELD CORE =====
+
+  orchestrator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: neuroshield-orchestrator
+    ports:
+      - "8000:8000"
+    environment:
+      PYTHONUNBUFFERED: 1
+      ENVIRONMENT: production
+      LOG_LEVEL: info
+      JENKINS_URL: http://jenkins:8080
+      PROMETHEUS_URL: http://prometheus:9090
+      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgresql://admin:neuroshield_db_pass@postgres:5432/neuroshield_db
+      APP_URL: http://microservice:5000
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - neuroshield-prod
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      prometheus:
+        condition: service_healthy
+      jenkins:
+        condition: service_started
+      microservice:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ===== DASHBOARD & MONITORING UI =====
+  # Nginx would go here - skipped for now
+  # Can be added later for reverse proxying
+
+networks:
+  neuroshield-prod:
+    driver: bridge
+    name: neuroshield-prod
+
+volumes:
+  postgres_data:
+    name: neuroshield-postgres-data
+  redis_data:
+    name: neuroshield-redis-data
+  jenkins_data:
+    name: neuroshield-jenkins-data
+  prometheus_data:
+    name: neuroshield-prometheus-data
+  grafana_data:
+    name: neuroshield-grafana-data
+  alertmanager_data:
+    name: neuroshield-alertmanager-data
