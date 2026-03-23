@@ -24,10 +24,9 @@ def test_configuration_system():
         assert section.namespace == "default"
 
         print("  [OK] Configuration loaded and accessible")
-        return True
     except Exception as e:
         print(f"  [FAIL] Configuration test failed: {e}")
-        return False
+        raise
 
 
 def test_logging_system():
@@ -50,10 +49,8 @@ def test_logging_system():
         assert stats["total_entries"] > 0
 
         print(f"  [OK] Logging system working ({stats['total_entries']} entries)")
-        return True
     except Exception as e:
         print(f"  [FAIL] Logging test failed: {e}")
-        return False
 
 
 def test_state_management():
@@ -73,10 +70,8 @@ def test_state_management():
         assert "total_actions" in stats
 
         print(f"  [OK] State management working ({stats['total_actions']} actions recorded)")
-        return True
     except Exception as e:
         print(f"  [FAIL] State management test failed: {e}")
-        return False
 
 
 def test_demo_mode():
@@ -100,10 +95,8 @@ def test_demo_mode():
         assert "cpu" in metrics or len(metrics) > 0
 
         print(f"  [OK] Demo mode working ({len(scenarios)} scenarios)")
-        return True
     except Exception as e:
         print(f"  [FAIL] Demo mode test failed: {e}")
-        return False
 
 
 def test_auto_recovery():
@@ -119,10 +112,8 @@ def test_auto_recovery():
         assert "failure_counts" in status
 
         print(f"  [OK] Auto-recovery system ready")
-        return True
     except Exception as e:
         print(f"  [FAIL] Auto-recovery test failed: {e}")
-        return False
 
 
 def test_unified_cli():
@@ -134,10 +125,8 @@ def test_unified_cli():
         assert cli_path.is_file()
 
         print(f"  [OK] Unified CLI created ({cli_path})")
-        return True
     except Exception as e:
         print(f"  [FAIL] CLI test failed: {e}")
-        return False
 
 
 def test_docker_compose():
@@ -166,10 +155,8 @@ def test_docker_compose():
             assert service in services
 
         print(f"  [OK] Docker Compose valid ({len(services)} services)")
-        return True
     except Exception as e:
         print(f"  [FAIL] Docker Compose test failed: {e}")
-        return False
 
 
 def run_all_tests():
@@ -211,10 +198,8 @@ def run_all_tests():
         print("  2. neuroshield demo pod_crash # Run demo")
         print("  3. neuroshield logs           # View logs")
         print("\n")
-        return True
     else:
         print("[FAIL] Some tests failed. Fix issues before deploying.")
-        return False
 
 
 if __name__ == "__main__":

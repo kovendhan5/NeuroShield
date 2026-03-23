@@ -134,7 +134,7 @@ class FailurePredictor:
         return np.concatenate([log_embed.astype(np.float32), telemetry_vec], axis=0)
 
     def predict(self, log_text: str, telemetry: TelemetryInput = None) -> float:
-        """Predict failure probability.
+        """Predict failure probability from log text and telemetry.
 
         Args:
             log_text: Jenkins log text.
@@ -142,14 +142,75 @@ class FailurePredictor:
 
         Returns:
             Failure probability between 0 and 1.
+
+        Raises:
+            ValueError: If log_text is not a string.
+            TypeError: If model inference fails.
         """
-        state_vector = self.build_state_vector(log_text, telemetry)
-        tensor = torch.tensor(state_vector, dtype=torch.float32, device=self.device).unsqueeze(0)
-        with torch.no_grad():
-            logits = self.classifier(tensor).squeeze(0)
-            prob = torch.sigmoid(logits).item()
-        prob = self._apply_status_boost(float(prob), telemetry)
-        return prob
+        if not isinstance(log_text, str):
+            raise ValueError(
+                f"log_text must be a str, got {type(log_text).__name__}. "
+                "Use predict_from_state() for numpy arrays."
+            )
+
+        try:
+            state_vector = self.build_state_vector(log_text, telemetry)
+            return self.predict_from_state(state_vector, telemetry)
+        except Exception as e:
+            raise TypeError(f"Prediction failed: {str(e)}") from e
+
+    def predict_from_state(
+        self,
+        state_vector: np.ndarray,
+        telemetry: TelemetryInput = None
+    ) -> float:
+        """Predict failure probability from a pre-built state vector.
+
+        This method is used when you already have a 52D or 24D state vector
+        and want to predict without re-encoding logs.
+
+        Args:
+            state_vector: NumPy array of shape (24,) or (52,).
+            telemetry: Telemetry dict for status boost (optional).
+
+        Returns:
+            Failure probability between 0 and 1.
+
+        Raises:
+            ValueError: If state_vector has wrong shape.
+            RuntimeError: If model inference fails.
+        """
+        if not isinstance(state_vector, np.ndarray):
+            raise ValueError(
+                f"state_vector must be np.ndarray, got {type(state_vector).__name__}"
+            )
+
+        # Handle both 24D and 52D state vectors
+        if state_vector.shape[0] == 52:
+            # Take first 24 dimensions (log embedding + telemetry)
+            state_vector = state_vector[:24]
+        elif state_vector.shape[0] != 24:
+            raise ValueError(
+                f"state_vector must be 24D or 52D, got shape {state_vector.shape}"
+            )
+
+        try:
+            tensor = torch.tensor(
+                state_vector,
+                dtype=torch.float32,
+                device=self.device
+            ).unsqueeze(0)
+
+            with torch.no_grad():
+                logits = self.classifier(tensor).squeeze(0)
+                prob = torch.sigmoid(logits).item()
+
+            prob = self._apply_status_boost(float(prob), telemetry)
+            return prob
+        except Exception as e:
+            raise RuntimeError(
+                f"Model inference failed: {str(e)}"
+            ) from e
 
     def _apply_status_boost(self, prob: float, telemetry: TelemetryInput) -> float:
         """Boost probability for FAILURE builds when model signal is too weak."""

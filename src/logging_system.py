@@ -6,7 +6,7 @@ Structured JSON logging with persistence, querying, and analytics
 import json
 import logging
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass, asdict
@@ -68,7 +68,7 @@ class StructuredLogger:
     ):
         """Log entry with context."""
         entry = LogEntry(
-            timestamp=datetime.utcnow().isoformat(),
+            timestamp=datetime.now(timezone.utc).isoformat(),
             level=level.upper(),
             source=source,
             message=message,
@@ -164,7 +164,7 @@ class StructuredLogger:
         if not self.log_file.exists():
             return []
 
-        cutoff = datetime.utcnow() - timedelta(hours=hours)
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
         entries = []
 
         with open(self.log_file, "r") as f:
@@ -217,7 +217,7 @@ class StructuredLogger:
         if not self.log_file.exists():
             return
 
-        cutoff = datetime.utcnow() - timedelta(days=days)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
         entries = []
 
         with open(self.log_file, "r") as f:
