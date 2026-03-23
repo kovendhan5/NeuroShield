@@ -1,0 +1,79 @@
+# NeuroShield v3 Configuration
+# Central config for orchestrator, API, and demo
+
+system:
+  name: "NeuroShield v3"
+  version: "3.0.0"
+  demo_mode: true  # Set false for production
+
+orchestrator:
+  check_interval: 10  # seconds
+  action_timeout: 300  # seconds
+  history_size: 1000  # recent events to keep in memory
+
+detection:
+  cpu_threshold: 80  # %
+  memory_threshold: 85  # %
+  pod_restart_threshold: 3  # count in 5 min
+  error_rate_threshold: 0.3  # 30%
+  trend_window: 5  # minutes
+
+connectors:
+  jenkins:
+    url: "http://localhost:8080"
+    username: "admin"
+    password: "admin123"
+    timeout: 10
+
+  kubernetes:
+    namespace: "default"
+    polling_interval: 10
+
+  prometheus:
+    url: "http://localhost:9090"
+    timeout: 10
+
+api:
+  host: "0.0.0.0"
+  port: 8000
+  debug: false
+  docs: true  # /docs endpoint
+
+database:
+  path: "data/neuroshield.db"
+  backup_interval: 3600  # 1 hour
+
+healing_actions:
+  restart_pod:
+    enabled: true
+    cooldown: 60  # seconds
+
+  scale_up:
+    enabled: true
+    replicas: 2
+
+  clear_cache:
+    enabled: true
+
+  retry_build:
+    enabled: true
+    max_retries: 3
+
+  rollback_deploy:
+    enabled: true
+
+  escalate_to_human:
+    enabled: true
+
+logging:
+  level: "INFO"
+  format: "json"  # json or text
+  file: "logs/neuroshield.log"
+
+demo:
+  scenarios:
+    - "pod_crash"
+    - "memory_leak"
+    - "cpu_spike"
+    - "bad_deploy"
+    - "cascading_failure"

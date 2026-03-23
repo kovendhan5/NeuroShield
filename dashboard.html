@@ -1,0 +1,640 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NeuroShield v3 - CI/CD Self-Healing Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #0f0c29 0%, #302b63 50%, #24243e 100%);
+            color: #fff;
+            min-height: 100vh;
+            padding: 20px;
+            overflow-x: hidden;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        /* Header */
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+            animation: slideIn 0.8s ease-out;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            background: linear-gradient(135deg, #00ff88 0%, #00ccff 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 10px;
+            font-weight: 800;
+            letter-spacing: -1px;
+        }
+
+        .header p {
+            font-size: 1rem;
+            color: rgba(255, 255, 255, 0.7);
+            margin-bottom: 20px;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 8px 16px;
+            background: rgba(0, 255, 136, 0.2);
+            border: 1px solid #00ff88;
+            border-radius: 20px;
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: #00ff88;
+            animation: pulse 2s infinite;
+        }
+
+        .status-badge.warning {
+            background: rgba(255, 193, 7, 0.2);
+            border-color: #ffc107;
+            color: #ffc107;
+        }
+
+        .status-badge.critical {
+            background: rgba(255, 52, 52, 0.2);
+            border-color: #ff3434;
+            color: #ff3434;
+        }
+
+        /* Grid Layout */
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .card {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 24px;
+            transition: transform 0.3s ease, border-color 0.3s ease;
+        }
+
+        .card:hover {
+            transform: translateY(-4px);
+            border-color: rgba(0, 255, 136, 0.3);
+        }
+
+        .card h3 {
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: rgba(255, 255, 255, 0.6);
+            margin-bottom: 16px;
+            font-weight: 600;
+        }
+
+        .metric-value {
+            font-size: 2.5rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, #00ff88 0%, #00ccff 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 8px;
+        }
+
+        .metric-label {
+            font-size: 0.85rem;
+            color: rgba(255, 255, 255, 0.5);
+            margin-bottom: 12px;
+        }
+
+        .metric-bar {
+            width: 100%;
+            height: 6px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 3px;
+            overflow: hidden;
+            margin-top: 8px;
+        }
+
+        .metric-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #00ff88 0%, #00ccff 100%);
+            border-radius: 3px;
+            transition: width 0.5s ease;
+        }
+
+        /* Event Stream */
+        .event-stream {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 30px;
+        }
+
+        .event-stream h3 {
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: rgba(255, 255, 255, 0.6);
+            margin-bottom: 20px;
+            font-weight: 600;
+        }
+
+        .event {
+            display: flex;
+            align-items: center;
+            padding: 12px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            animation: slideIn 0.3s ease-out;
+        }
+
+        .event:last-child {
+            border-bottom: none;
+        }
+
+        .event-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-right: 16px;
+            font-size: 1.2rem;
+            font-weight: bold;
+            flex-shrink: 0;
+        }
+
+        .event-icon.heal {
+            background: rgba(0, 255, 136, 0.2);
+            color: #00ff88;
+            border: 1px solid rgba(0, 255, 136, 0.4);
+        }
+
+        .event-icon.escalate {
+            background: rgba(255, 52, 52, 0.2);
+            color: #ff3434;
+            border: 1px solid rgba(255, 52, 52, 0.4);
+        }
+
+        .event-icon.ok {
+            background: rgba(0, 204, 255, 0.2);
+            color: #00ccff;
+            border: 1px solid rgba(0, 204, 255, 0.4);
+        }
+
+        .event-icon.alert {
+            background: rgba(255, 193, 7, 0.2);
+            color: #ffc107;
+            border: 1px solid rgba(255, 193, 7, 0.4);
+        }
+
+        .event-content {
+            flex: 1;
+        }
+
+        .event-title {
+            font-weight: 600;
+            font-size: 0.95rem;
+            margin-bottom: 4px;
+        }
+
+        .event-time {
+            font-size: 0.8rem;
+            color: rgba(255, 255, 255, 0.5);
+        }
+
+        /* Controls */
+        .controls {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 30px;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            font-size: 0.95rem;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #00ff88 0%, #00ccff 100%);
+            color: #0f0c29;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(0, 255, 136, 0.4);
+        }
+
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.1);
+            color: #fff;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.15);
+            border-color: rgba(255, 255, 255, 0.5);
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* Footer */
+        .footer {
+            text-align: center;
+            padding: 20px;
+            color: rgba(255, 255, 255, 0.5);
+            font-size: 0.85rem;
+        }
+
+        /* Animations */
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes pulse {
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.5;
+            }
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .header h1 {
+                font-size: 1.8rem;
+            }
+
+            .metric-value {
+                font-size: 2rem;
+            }
+
+            .grid {
+                grid-template-columns: 1fr;
+            }
+
+            .controls {
+                flex-direction: column;
+            }
+
+            .btn {
+                width: 100%;
+            }
+        }
+
+        .loading {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #00ff88;
+            animation: pulse 1s infinite;
+            margin-left: 8px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>NeuroShield v3</h1>
+            <p>Intelligent CI/CD Self-Healing System</p>
+            <div class="status-badge" id="statusBadge">
+                <span id="statusText">Connecting...</span>
+                <span class="loading"></span>
+            </div>
+        </div>
+
+        <div class="controls">
+            <button class="btn btn-primary" onclick="triggerCycle()">Run Orchestration Cycle</button>
+            <button class="btn btn-secondary" onclick="injectPodCrash()">Demo: Pod Crash</button>
+            <button class="btn btn-secondary" onclick="injectMemoryLeak()">Demo: Memory Leak</button>
+            <button class="btn btn-secondary" onclick="injectCpuSpike()">Demo: CPU Spike</button>
+            <button class="btn btn-secondary" onclick="injectBadDeploy()">Demo: Bad Deploy</button>
+        </div>
+
+        <div class="grid" id="metricsGrid">
+            <div class="card">
+                <h3>App Health</h3>
+                <div class="metric-value" id="appHealth">-</div>
+                <div class="metric-label">System operational status</div>
+                <div class="metric-bar">
+                    <div class="metric-bar-fill" id="appHealthBar" style="width: 0%"></div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3>CPU Usage</h3>
+                <div class="metric-value" id="cpuMetric">-</div>
+                <div class="metric-label">Processor utilization</div>
+                <div class="metric-bar">
+                    <div class="metric-bar-fill" id="cpuBar" style="width: 0%"></div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3>Memory Usage</h3>
+                <div class="metric-value" id="memoryMetric">-</div>
+                <div class="metric-label">RAM utilization</div>
+                <div class="metric-bar">
+                    <div class="metric-bar-fill" id="memBar" style="width: 0%"></div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3>Pod Restarts</h3>
+                <div class="metric-value" id="podRestarts">-</div>
+                <div class="metric-label">Last 5 minutes</div>
+            </div>
+
+            <div class="card">
+                <h3>Error Rate</h3>
+                <div class="metric-value" id="errorRate">-</div>
+                <div class="metric-label">Request failures</div>
+            </div>
+
+            <div class="card">
+                <h3>Anomaly Score</h3>
+                <div class="metric-value" id="anomalyScore">-</div>
+                <div class="metric-label">System deviation</div>
+            </div>
+        </div>
+
+        <div class="event-stream">
+            <h3>Real-Time Event Stream</h3>
+            <div id="eventStream"></div>
+        </div>
+    </div>
+
+    <div class="footer">
+        <p>NeuroShield v3 - AI-powered CI/CD self-healing | Status: <span id="connectionStatus">Disconnected</span></p>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8000';
+        const WS_URL = 'ws://localhost:8000/ws/events';
+
+        let ws = null;
+        let eventCount = 0;
+        const maxEvents = 20;
+
+        // Connect to WebSocket
+        function connectWebSocket() {
+            ws = new WebSocket(WS_URL);
+
+            ws.onopen = () => {
+                console.log('WebSocket connected');
+                updateConnectionStatus('Connected', false);
+                updateStatusBadge('healthy');
+            };
+
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                handleWebSocketMessage(data);
+            };
+
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                updateConnectionStatus('Error', true);
+                updateStatusBadge('critical');
+            };
+
+            ws.onclose = () => {
+                console.log('WebSocket disconnected');
+                updateConnectionStatus('Disconnected', true);
+                updateStatusBadge('warning');
+                // Reconnect after 3 seconds
+                setTimeout(connectWebSocket, 3000);
+            };
+        }
+
+        function handleWebSocketMessage(data) {
+            console.log('WebSocket message:', data);
+
+            if (data.type === 'cycle_complete') {
+                updateDashboard(data.data);
+            }
+        }
+
+        function updateConnectionStatus(status, error) {
+            const el = document.getElementById('connectionStatus');
+            el.textContent = status;
+            el.style.color = error ? '#ff3434' : '#00ff88';
+        }
+
+        function updateStatusBadge(state) {
+            const badge = document.getElementById('statusBadge');
+            const text = document.getElementById('statusText');
+
+            badge.classList.remove('warning', 'critical');
+
+            if (state === 'healthy') {
+                badge.classList.add('ok');
+                text.textContent = '✓ System Healthy';
+            } else if (state === 'warning') {
+                badge.classList.add('warning');
+                text.textContent = '⚠ Warning';
+            } else if (state === 'critical') {
+                badge.classList.add('critical');
+                text.textContent = '✗ Critical';
+            }
+        }
+
+        async function updateDashboard(result) {
+            if (!result.metrics) return;
+
+            const metrics = result.metrics;
+
+            // Update metrics
+            updateMetric('appHealth', metrics.app_health_percent, '%', 'appHealthBar');
+            updateMetric('cpuMetric', metrics.cpu_percent, '%', 'cpuBar');
+            updateMetric('memoryMetric', metrics.memory_percent, '%', 'memBar');
+            updateMetric('podRestarts', metrics.pod_restarts);
+            updateMetric('errorRate', (metrics.error_rate * 100).toFixed(1), '%');
+            updateMetric('anomalyScore', (result.anomaly_score * 100).toFixed(0), '%');
+
+            // Determine status
+            let status = 'healthy';
+            if (result.anomalies && result.anomalies.length > 0) {
+                status = result.anomalies.length <= 2 ? 'warning' : 'critical';
+            }
+            updateStatusBadge(status);
+
+            // Add events
+            if (result.actions_taken && result.actions_taken.length > 0) {
+                result.actions_taken.forEach(action => {
+                    addEvent({
+                        type: action.success ? 'heal' : 'alert',
+                        title: `${capitalizeAction(action.action)}`,
+                        subtitle: action.success ? 'Successfully executed' : 'Failed'
+                    });
+                });
+            }
+
+            if (result.anomalies && result.anomalies.length > 0) {
+                result.anomalies.forEach(anomaly => {
+                    addEvent({
+                        type: 'alert',
+                        title: `Anomaly detected: ${anomaly.type}`,
+                        subtitle: `Value: ${anomaly.value || 'N/A'}`
+                    });
+                });
+            }
+        }
+
+        function updateMetric(id, value, suffix = '', barId = null) {
+            const el = document.getElementById(id);
+            if (el) {
+                el.textContent = value.toFixed(1) + suffix;
+
+                if (barId) {
+                    const bar = document.getElementById(barId);
+                    if (bar) {
+                        bar.style.width = Math.min(value, 100) + '%';
+                    }
+                }
+            }
+        }
+
+        function capitalizeAction(action) {
+            return action.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+        }
+
+        function addEvent(event) {
+            const streamEl = document.getElementById('eventStream');
+            if (!streamEl) return;
+
+            const eventEl = document.createElement('div');
+            eventEl.className = 'event';
+
+            const icons = {
+                heal: '✓',
+                escalate: '!',
+                ok: '→',
+                alert: '⚠'
+            };
+
+            const timestamp = new Date().toLocaleTimeString();
+
+            eventEl.innerHTML = `
+                <div class="event-icon ${event.type}">${icons[event.type] || '•'}</div>
+                <div class="event-content">
+                    <div class="event-title">${event.title}</div>
+                    <div class="event-time">${timestamp} - ${event.subtitle}</div>
+                </div>
+            `;
+
+            streamEl.insertBefore(eventEl, streamEl.firstChild);
+
+            // Remove old events
+            eventCount++;
+            if (eventCount > maxEvents) {
+                const children = streamEl.children;
+                for (let i = children.length - 1; i >= maxEvents; i--) {
+                    children[i].remove();
+                }
+                eventCount = maxEvents;
+            }
+        }
+
+        async function triggerCycle() {
+            try {
+                addEvent({ type: 'ok', title: 'Orchestration cycle triggered', subtitle: 'Processing...' });
+                const response = await fetch(`${API_BASE}/api/cycle/trigger`, { method: 'POST' });
+                const result = await response.json();
+                updateDashboard(result);
+            } catch (e) {
+                console.error('Error triggering cycle:', e);
+                addEvent({ type: 'alert', title: 'Error triggering cycle', subtitle: e.message });
+            }
+        }
+
+        function injectPodCrash() {
+            addEvent({ type: 'alert', title: 'Injecting pod crash scenario', subtitle: 'Simulated failure' });
+            // This would call backend API
+            triggerCycle();
+        }
+
+        function injectMemoryLeak() {
+            addEvent({ type: 'alert', title: 'Injecting memory leak scenario', subtitle: 'Simulated failure' });
+            triggerCycle();
+        }
+
+        function injectCpuSpike() {
+            addEvent({ type: 'alert', title: 'Injecting CPU spike scenario', subtitle: 'Simulated failure' });
+            triggerCycle();
+        }
+
+        function injectBadDeploy() {
+            addEvent({ type: 'alert', title: 'Injecting bad deployment scenario', subtitle: 'Simulated failure' });
+            triggerCycle();
+        }
+
+        // Fetch initial status on load
+        async function loadInitialStatus() {
+            try {
+                const response = await fetch(`${API_BASE}/api/status`);
+                const status = await response.json();
+                updateDashboard(status);
+            } catch (e) {
+                console.error('Error loading status:', e);
+            }
+        }
+
+        // Initialize
+        window.addEventListener('load', () => {
+            loadInitialStatus();
+            connectWebSocket();
+
+            // Refresh every 5 seconds
+            setInterval(() => {
+                fetch(`${API_BASE}/api/status`)
+                    .then(r => r.json())
+                    .then(data => {
+                        document.getElementById('appHealth').textContent = data.metrics.app_health_percent.toFixed(1) + '%';
+                        document.getElementById('cpuMetric').textContent = data.metrics.cpu_percent.toFixed(1) + '%';
+                        document.getElementById('memoryMetric').textContent = data.metrics.memory_percent.toFixed(1) + '%';
+                    })
+                    .catch(e => console.error('Refresh error:', e));
+            }, 5000);
+        });
+    </script>
+</body>
+</html>
