@@ -13,6 +13,7 @@ from typing import Any, Dict, Optional
 from dataclasses import dataclass
 
 from dotenv import load_dotenv
+from .manager import Config as ConfigManager, get_config, load_config
 
 load_dotenv()
 
@@ -207,11 +208,23 @@ class Config:
 
 
 # Convenience functions
-def get_config(path: str, default: Any = None) -> Any:
-    """Get config value."""
-    return Config.get(path, default)
+def get_config_value(path: str, default: Any = None) -> Any:
+    """Get config value using legacy interface."""
+    try:
+        cfg = get_config()
+        keys = path.split('.')
+        value = cfg.to_dict()
+        for key in keys:
+            value = value.get(key, {})
+        return value if value != {} else default
+    except Exception:
+        return default
 
 
-def get_section(name: str) -> ConfigSection:
-    """Get config section."""
-    return Config.section(name)
+def get_section_obj(name: str) -> Dict[str, Any]:
+    """Get config section using legacy interface."""
+    try:
+        cfg = get_config()
+        return cfg.get_section(name)
+    except Exception:
+        return {}
