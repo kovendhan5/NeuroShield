@@ -9,7 +9,6 @@ import os
 import subprocess
 import sys
 import time
-import webbrowser
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,10 +25,6 @@ from dotenv import load_dotenv
 from stable_baselines3 import PPO
 
 from src.prediction.predictor import FailurePredictor, build_52d_state
-from src.utils.notifications import (
-    send_email_alert, write_active_alert,
-    send_healing_notification, send_escalation_alert, send_self_ci_failure_alert,
-)
 from src.utils.intelligence import detect_early_warning, explain_decision
 from src.config import validate_k8s_name, validate_positive_int
 
@@ -51,8 +46,6 @@ ACTION_NAMES: Dict[int, str] = {
     1: "scale_up",
     2: "retry_build",
     3: "rollback_deploy",
-    4: "clear_cache",
-    5: "escalate_to_human",
 }
 
 # MTTR baselines (seconds) — manual remediation without NeuroShield
@@ -61,8 +54,6 @@ MTTR_BASELINES: Dict[str, float] = {
     "scale_up": 60.0,
     "retry_build": 70.0,
     "rollback_deploy": 120.0,
-    "clear_cache": 45.0,
-    "escalate_to_human": 300.0,
 }
 
 # Reverse lookup: action name → action id
@@ -496,92 +487,6 @@ def execute_healing_action(action_id: int, context: Dict[str, str]) -> bool:
             else:
                 detail = undo.stderr.strip()[:200]
 
-        elif action_id == 4:  # clear_cache
-            logging.info("[ACTION] clear_cache -- restarting %s to free memory", service)
-            # Restart pod to clear all in-memory state
-            cmd = ["kubectl", "rollout", "restart", f"deployment/{service}", "-n", namespace]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-            if result.returncode == 0:
-                wait = subprocess.run(
-                    ["kubectl", "rollout", "status", f"deployment/{service}", "-n", namespace, "--timeout=60s"],
-                    capture_output=True, text=True, timeout=90,
-                )
-                success = wait.returncode == 0
-                detail = "pod restarted, cache cleared" if success else wait.stderr.strip()[:200]
-                if success:
-                    _ensure_port_forward(service)
-            else:
-                detail = result.stderr.strip()[:200]
-
-        elif action_id == 5:  # escalate_to_human
-            logging.info("[ACTION] escalate_to_human -- writing escalation report")
-            report_dir = Path("data/escalation_reports")
-            report_dir.mkdir(parents=True, exist_ok=True)
-            ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-            report_path = report_dir / f"escalation_{ts}.json"
-
-            report = {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "failure_type": context.get("failure_pattern", "unknown"),
-                "failure_probability": context.get("failure_prob", "?"),
-                "build_number": context.get("build_number", "?"),
-                "affected_service": service,
-                "namespace": namespace,
-                "actions_already_tried": context.get("actions_tried", "none"),
-                "system_state": {
-                    "suggestion": "Investigate root cause manually",
-                },
-                "suggested_fix": "Review application logs and recent code changes",
-            }
-
-            # Get current pod status for report
-            try:
-                pods = subprocess.run(
-                    ["kubectl", "get", "pods", "-n", namespace, "-l", f"app={service}", "-o", "wide"],
-                    capture_output=True, text=True, timeout=10,
-                )
-                report["system_state"]["pod_status"] = pods.stdout.strip()
-            except Exception:
-                pass
-
-            with open(report_path, "w", encoding="utf-8") as f:
-                json.dump(report, f, indent=2)
-
-            # --- Notify all channels ---
-            esc_reason = context.get("escalation_reason", (
-                f"High confidence failure: prob={context.get('failure_prob', '?')}, "
-                f"pattern={context.get('failure_pattern', 'unknown')}"
-            ))
-
-            send_escalation_alert(
-                reason=esc_reason,
-                report_path=str(report_path),
-                telemetry=context,
-            )
-            write_active_alert(
-                title="Human Intervention Required",
-                message=esc_reason,
-                severity="HIGH",
-                details=report,
-            )
-
-            # Generate human-readable HTML report and open in browser
-            try:
-                report_context = {**context, **report.get("system_state", {})}
-                report_id, html_path = generate_incident_report(report_context, "escalate_to_human", esc_reason)
-                logging.info("[ACTION] HTML incident report: %s", html_path)
-            except Exception as exc:
-                logging.warning("[ACTION] HTML report generation failed: %s", exc)
-
-            print(f"\n{'=' * 60}")
-            print(f"  ESCALATION REPORT: {report_path}")
-            print(f"{'=' * 60}")
-            print(json.dumps(report, indent=2))
-            print(f"{'=' * 60}\n")
-
-            success = True
-            detail = str(report_path)
-
         else:
             logging.warning("Unknown action id: %s", action_id)
 
@@ -766,15 +671,13 @@ def determine_healing_action(
 ) -> Tuple[str, str]:
     """Select a healing action using rules first, falling back to the ML decision.
 
-    Rule-based overrides ensure all 6 healing actions can trigger in a demo:
+    Rule-based overrides ensure critical healing actions trigger correctly:
     - app DOWN (health=0%) → ALWAYS restart_pod
     - app degraded (0% < health < 100%) → restart_pod
     - pod restart loop → restart_pod
     - CPU/memory spike → scale_up
     - build failure → retry_build
     - high error rate → rollback_deploy
-    - memory elevated + build OK → clear_cache
-    - very high confidence anomaly → escalate_to_human
     - otherwise → use ML model decision
 
     Returns:
@@ -809,12 +712,6 @@ def determine_healing_action(
     if error_rate > 0.3:
         return "rollback_deploy", f"High HTTP error rate: {error_rate:.3f} req/s"
 
-    if memory > 70 and build_status == "SUCCESS":
-        return "clear_cache", f"Memory elevated ({memory:.0f}%) with healthy build"
-
-    if prob >= 0.85:
-        return "escalate_to_human", f"High confidence anomaly (prob={prob:.3f})"
-
     # Fall back to ML model decision
     return ml_action, f"ML model decision (prob={prob:.3f})"
 
@@ -823,116 +720,8 @@ def determine_healing_action(
 # Incident HTML report generator
 # ---------------------------------------------------------------------------
 
-def generate_incident_report(context: Dict, action_name: str, reason: str) -> Tuple[str, str]:
-    """Generate a professional HTML incident report and open it in the browser.
 
-    Args:
-        context: Dict with failure_prob, failure_pattern, build_number, etc.
-        action_name: The healing action taken.
-        reason: Human-readable reason for the action.
-
-    Returns:
-        (report_id, report_path_str)
-    """
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    report_id = f"INC-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-
-    cpu = context.get("prometheus_cpu_usage", "N/A")
-    memory = context.get("prometheus_memory_usage", "N/A")
-    build_status = context.get("jenkins_last_build_status", "N/A")
-    build_num = context.get("build_number", "N/A")
-    failure_prob = context.get("failure_prob", "N/A")
-
-    html = f"""<!DOCTYPE html>
-<html>
-<head>
-    <title>NeuroShield Incident Report {report_id}</title>
-    <style>
-        body {{ font-family: Arial, sans-serif; max-width: 800px; margin: 40px auto;
-               background: #f9f9f9; color: #333; }}
-        .header {{ background: #1a1a2e; color: white; padding: 20px 28px;
-                  border-radius: 8px; margin-bottom: 24px; }}
-        .header h1 {{ margin: 0 0 8px 0; font-size: 1.5rem; }}
-        .header p {{ margin: 0; color: #a0aec0; font-size: 0.9rem; }}
-        .section {{ background: white; border: 1px solid #e2e8f0; border-radius: 8px;
-                   padding: 20px; margin-bottom: 16px; }}
-        .section h2 {{ margin-top: 0; color: #1a1a2e; font-size: 1.1rem; }}
-        .critical {{ color: #c53030; font-weight: bold; background: #fff5f5;
-                   padding: 10px 14px; border-radius: 6px; border-left: 4px solid #c53030; }}
-        .metric {{ display: inline-block; background: #edf2f7; padding: 8px 14px;
-                  border-radius: 6px; margin: 4px; font-size: 0.9rem; }}
-        table {{ width: 100%; border-collapse: collapse; }}
-        th, td {{ padding: 10px 14px; border: 1px solid #e2e8f0; text-align: left; }}
-        th {{ background: #1a1a2e; color: white; }}
-        tr:nth-child(even) {{ background: #f7fafc; }}
-        a {{ color: #3182ce; }}
-        .badge {{ display: inline-block; padding: 2px 10px; border-radius: 12px;
-                 font-size: 0.8rem; font-weight: 600; background: #fed7d7; color: #c53030; }}
-    </style>
-</head>
-<body>
-    <div class="header">
-        <h1>&#128737; NeuroShield Incident Report</h1>
-        <p>Report ID: <strong>{report_id}</strong> &nbsp;|&nbsp; Generated: {timestamp}</p>
-    </div>
-
-    <div class="section">
-        <h2>&#9888; Incident Summary</h2>
-        <p class="critical">{reason}</p>
-        <p>
-            <span class="metric">Action: <strong>{action_name}</strong></span>
-            <span class="metric">Build: <strong>#{build_num}</strong></span>
-            <span class="metric">Failure Prob: <strong>{failure_prob}</strong></span>
-        </p>
-    </div>
-
-    <div class="section">
-        <h2>&#128200; System State at Time of Incident</h2>
-        <span class="metric">CPU: {cpu}%</span>
-        <span class="metric">Memory: {memory}%</span>
-        <span class="metric">Build Status: {build_status}</span>
-    </div>
-
-    <div class="section">
-        <h2>&#128270; Recommended Actions</h2>
-        <ol>
-            <li>Check Jenkins build logs at
-                <a href="http://localhost:8080">localhost:8080</a></li>
-            <li>Check pod status: <code>kubectl get pods</code></li>
-            <li>Review recent deployments:
-                <code>kubectl rollout history deployment/dummy-app</code></li>
-            <li>Check application logs:
-                <code>kubectl logs deployment/dummy-app</code></li>
-            <li>View NeuroShield dashboard:
-                <a href="http://localhost:8501">localhost:8501</a></li>
-        </ol>
-    </div>
-
-    <div class="section">
-        <h2>&#128279; Quick Links</h2>
-        <p>
-            <a href="http://localhost:8080/job/neuroshield-app-build/">Jenkins Job</a> &nbsp;|&nbsp;
-            <a href="http://localhost:9090">Prometheus</a> &nbsp;|&nbsp;
-            <a href="http://localhost:8501">NeuroShield Dashboard</a>
-        </p>
-    </div>
-</body>
-</html>
-"""
-
-    report_dir = Path("data/escalation_reports")
-    report_dir.mkdir(parents=True, exist_ok=True)
-    report_path = report_dir / f"{report_id}.html"
-    report_path.write_text(html, encoding="utf-8")
-
-    # Auto-open in browser (best-effort; skip during testing/offline)
-    try:
-        webbrowser.open(f"file:///{report_path.absolute()}")
-    except Exception:
-        pass
-
-    return report_id, str(report_path)
-
+# Main orchestrator loop
 
 def _print_banner() -> None:
     print("\n" + "=" * 65)
@@ -986,17 +775,6 @@ def handle_self_ci_failure(build_info: Dict, reason: str = "") -> None:
     _SELF_CI_STATUS_FILE.write_text(json.dumps(status, indent=2), encoding="utf-8")
     logging.critical("SELF-CI FAILURE: build #%s → %s",
                      build_info.get("number"), build_info.get("result"))
-
-    send_self_ci_failure_alert(
-        build_number=build_info.get("number"),
-        stages_failed=["self-ci"],
-    )
-    write_active_alert(
-        title="Self-CI Pipeline Failure",
-        message=status["reason"],
-        severity="CRITICAL",
-        details=status,
-    )
 
 
 def _update_self_ci_status_ok(build_info: Dict) -> None:
@@ -1297,17 +1075,6 @@ def main() -> None:
                     _write_cooldown_ts()
 
                     total_actions += 1
-                    # Email notification for healing result
-                    send_healing_notification(
-                        action=action_name,
-                        reason=action_reason,
-                        result="SUCCESS" if success else "FAILED",
-                        telemetry={
-                            "prometheus_cpu_usage": f"{prom_metrics['cpu_usage']:.1f}",
-                            "prometheus_memory_usage": f"{prom_metrics['memory_usage']:.1f}",
-                            "jenkins_last_build_status": build_status,
-                        },
-                    )
 
                     if success:
                         successful_actions += 1

@@ -259,33 +259,15 @@ class TestExecuteHealingAction:
         assert ok is True
         assert mock_run.call_count >= 2  # undo + status
 
-    @patch("src.orchestrator.main._ensure_port_forward")
-    @patch("src.orchestrator.main.subprocess.run")
-    def test_action_4_clear_cache(self, mock_run, _mock_pf):
-        """Action 4 = clear_cache: kubectl rollout restart + status."""
-        mock_run.return_value = MagicMock(returncode=0)
-        ok = execute_healing_action(4, {})
-        assert ok is True
-        assert mock_run.call_count == 2  # restart + status
-
-    def test_action_5_escalate_to_human(self, tmp_path, monkeypatch):
-        """Action 5 = escalate_to_human: writes JSON report to data/escalation_reports/."""
-        monkeypatch.chdir(tmp_path)
-        ok = execute_healing_action(5, {"failure_prob": "0.9"})
-        assert ok is True
-        reports = list((tmp_path / "data" / "escalation_reports").glob("escalation_*.json"))
-        assert len(reports) >= 1
-
 
 # ── ACTION_NAMES ──────────────────────────────────────────────────────────────
 
 
 class TestActionNames:
-    def test_all_six_present(self):
-        assert len(ACTION_NAMES) == 6
+    def test_all_four_core_actions_present(self):
+        """Test that exactly 4 core healing actions are defined."""
+        assert len(ACTION_NAMES) == 4
         assert ACTION_NAMES[0] == "restart_pod"
         assert ACTION_NAMES[1] == "scale_up"
         assert ACTION_NAMES[2] == "retry_build"
         assert ACTION_NAMES[3] == "rollback_deploy"
-        assert ACTION_NAMES[4] == "clear_cache"
-        assert ACTION_NAMES[5] == "escalate_to_human"
