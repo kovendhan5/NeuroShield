@@ -1,0 +1,61 @@
+version: '3.8'
+
+services:
+  neuroshield-orchestrator:
+    build:
+      context: .
+      dockerfile: Dockerfile.orchestrator
+    container_name: neuroshield-orchestrator
+    restart: unless-stopped
+
+    # Mount necessary volumes
+    volumes:
+      # Config and environment
+      - ./.env:/app/.env:ro
+      - ./config:/app/config:ro
+      - $HOME/.kube/config:/root/.kube/config:ro  # Kubernetes access
+
+      # Output directories
+      - ./logs:/app/logs
+      - ./data:/app/data
+      - ./models:/app/models:ro
+
+    # Environment variables
+    environment:
+      PYTHONUNBUFFERED: "1"
+      # These will be overridden by .env file
+      JENKINS_URL: http://host.docker.internal:8080
+      PROMETHEUS_URL: http://host.docker.internal:9090
+      DUMMY_APP_URL: http://host.docker.internal:5000
+      K8S_NAMESPACE: default
+      AFFECTED_SERVICE: dummy-app
+
+    # Network access to host services
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    # Logging
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+
+# To run this compose file:
+# 1. Build the orchestrator Docker image:
+#    docker-compose build
+#
+# 2. Run the orchestrator:
+#    docker-compose up -d
+#
+# 3. View logs in real-time:
+#    docker-compose logs -f neuroshield-orchestrator
+#
+# 4. Stop the orchestrator:
+#    docker-compose down
+#
+# Requirements:
+#  - .env file configured with Jenkins/Prometheus URLs
+#  - ~/.kube/config accessible (for kubectl)
+#  - Services (Jenkins, Prometheus, Kubernetes) must be reachable from Docker container

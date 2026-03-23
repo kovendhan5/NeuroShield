@@ -1,0 +1,27 @@
+{
+  "name": "neuroshield-backend",
+  "version": "1.0.0",
+  "description": "Production-ready CI/CD monitoring and healing application",
+  "main": "backend.js",
+  "scripts": {
+    "start": "node backend.js",
+    "dev": "nodemon backend.js"
+  },
+  "keywords": ["ci/cd", "monitoring", "healing", "aiopts"],
+  "author": "NeuroShield",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "prom-client": "^15.0.0",
+    "pg": "^8.11.0",
+    "redis": "^4.6.12",
+    "axios": "^1.6.2",
+    "winston": "^3.11.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
