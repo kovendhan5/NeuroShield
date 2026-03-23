@@ -263,7 +263,7 @@ services:
         BUILDKIT_INLINE_CACHE: 1
     image: neuroshield-microservice:${VERSION:-latest}
     container_name: neuroshield-microservice
-    user: "1000"  # Non-root user
+    user: "root"  # TODO: Phase 2 - fix non-root execution
     ports:
       - "127.0.0.1:5000:5000"  # Localhost only!
     environment:
@@ -314,7 +314,7 @@ services:
         BUILDKIT_INLINE_CACHE: 1
     image: neuroshield-orchestrator:${VERSION:-latest}
     container_name: neuroshield-orchestrator
-    user: "1000"  # Non-root user
+    user: "root"  # TODO: Phase 2 - fix non-root execution with proper home dir setup
     ports:
       - "127.0.0.1:8000:8000"  # Localhost only!
     environment:

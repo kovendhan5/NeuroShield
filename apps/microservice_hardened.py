@@ -266,6 +266,7 @@ def audit_log(action, resource_type, resource_id, changes=None):
 # ===== ROUTES =====
 
 @app.route('/health', methods=['GET'])
+@limiter.exempt
 def health():
     """Simple health check"""
     status = 'healthy'
@@ -280,6 +281,7 @@ def health():
     return jsonify({'status': status}), code
 
 @app.route('/health/detailed', methods=['GET'])
+@limiter.exempt
 def health_detailed():
     """Comprehensive health check"""
     health_info = {'timestamp': datetime.utcnow().isoformat()}
@@ -314,6 +316,7 @@ def health_detailed():
     return jsonify(health_info), 200
 
 @app.route('/metrics', methods=['GET'])
+@limiter.exempt
 def metrics():
     """Prometheus metrics"""
     db_pool_size = db_pool.closed if db_pool else 0
