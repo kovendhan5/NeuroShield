@@ -16,6 +16,11 @@ COPY . .
 # Create data directory
 RUN mkdir -p data logs
 
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+ENV TORCH_HOME=/tmp/torch
+ENV TORCHINDUCTOR_CACHE_DIR=/tmp/torch_cache
+
 # Expose API port
 EXPOSE 8000
 
