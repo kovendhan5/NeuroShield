@@ -20,8 +20,8 @@ from flask import Flask, request, jsonify, g
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from flask_cors import CORS
-from marshmallow import Schema, fields, validate, ValidationError
 from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
+from marshmallow import Schema, fields, ValidationError
 import psycopg2
 from psycopg2 import pool
 from redis import Redis
@@ -33,7 +33,12 @@ CORS(app)  # For cross-origin - can be restricted
 
 SECRET_KEY = os.getenv('API_SECRET_KEY', 'change-me-in-production')
 DB_URL = os.getenv('DATABASE_URL')
-REDIS_URL = os.getenv('REDIS_URL', 'redis://redis:6379')
+REDIS_PASSWORD = os.getenv('REDIS_PASSWORD', '')
+REDIS_URL = os.getenv('REDIS_URL')
+if not REDIS_URL and REDIS_PASSWORD:
+    REDIS_URL = f'redis://:{REDIS_PASSWORD}@redis:6379'
+elif not REDIS_URL:
+    REDIS_URL = 'redis://redis:6379'
 ENVIRONMENT = os.getenv('ENVIRONMENT', 'development')
 
 # ===== LOGGING - STRUCTURED =====
@@ -45,8 +50,13 @@ class StructuredFormatter(logging.Formatter):
             'level': record.levelname,
             'logger': record.name,
             'message': record.getMessage(),
-            'correlation_id': getattr(g, 'correlation_id', 'unknown'),
         }
+        # Only add correlation_id if in request context
+        try:
+            log_data['correlation_id'] = getattr(g, 'correlation_id', 'unknown')
+        except RuntimeError:
+            log_data['correlation_id'] = 'startup'
+
         if record.exc_info:
             log_data['exception'] = self.formatException(record.exc_info)
         return json.dumps(log_data)
@@ -59,16 +69,16 @@ logger.setLevel(logging.INFO)
 
 # ===== DATABASE CONNECTION POOL =====
 try:
-    db_pool = psycopg2.pool.SimpleConnectionPool(
-        minconn=2,
-        maxconn=20,
-        user='neuroshield_app',
-        password=os.getenv('DB_PASSWORD', 'default_pass'),
-        host='postgres',
-        port=5432,
-        database='neuroshield_db',
-        connect_timeout=5
-    )
+    # Use DATABASE_URL if provided, otherwise build from components
+    if DB_URL:
+        db_pool = psycopg2.pool.SimpleConnectionPool(
+            minconn=2,
+            maxconn=20,
+            dsn=DB_URL,
+            connect_timeout=5
+        )
+    else:
+        raise ValueError("DATABASE_URL not configured")
     logger.info("Database connection pool initialized")
 except Exception as e:
     logger.error(f"Failed to create DB pool: {e}")
@@ -88,7 +98,7 @@ limiter = Limiter(
     app=app,
     key_func=get_remote_address,
     default_limits=["200 per day", "50 per hour"],
-    storage_uri="redis://redis:6379" if redis_client else None
+    storage_uri=REDIS_URL if redis_client else None
 )
 
 # ===== METRICS =====
@@ -100,12 +110,9 @@ db_connections = Gauge('db_pool_connections_active', 'Active DB connections')
 
 # ===== VALIDATION SCHEMAS =====
 class JobSchema(Schema):
-    name = fields.String(required=True, validate=validate.Length(min=1, max=255))
-    status = fields.String(
-        default='pending',
-        validate=validate.OneOf(['pending', 'running', 'completed', 'failed'])
-    )
-    description = fields.String(validate=validate.Length(max=2000))
+    name = fields.String(required=True)
+    status = fields.String(allow_none=True)
+    description = fields.String(allow_none=True)
 
 # ===== AUTHENTICATION =====
 def token_required(f):
@@ -154,7 +161,7 @@ def log_request(response):
     ).inc()
 
     logger.info(f"Request completed: {response.status_code}")
-    response.headers['X-Correlation-ID'] = g.correlation_id
+    response.headers['X-Correlation-ID'] = getattr(g, 'correlation_id', 'unknown')
     return response
 
 @app.errorhandler(ValidationError)
@@ -410,23 +417,31 @@ def create_job():
 def rate_limit_exceeded(e):
     """Handle rate limit"""
     logger.warning(f"Rate limit exceeded - {request.remote_addr}")
-    return jsonify({'error': 'Rate limit exceeded'}), 429
+    correlation_id = getattr(g, 'correlation_id', 'unknown')
+    return jsonify({'error': 'Rate limit exceeded', 'trace_id': correlation_id}), 429
 
 @app.errorhandler(404)
 def not_found(e):
-    return jsonify({'error': 'Not found'}), 404
+    correlation_id = getattr(g, 'correlation_id', 'unknown')
+    return jsonify({'error': 'Not found', 'trace_id': correlation_id}), 404
 
 @app.errorhandler(500)
 def server_error(e):
     logger.error(f"Server error: {e}", exc_info=True)
     request_errors.labels(endpoint=request.endpoint or 'unknown', error_type='server_error').inc()
-    return jsonify({'error': 'Internal server error', 'trace_id': g.correlation_id}), 500
+    correlation_id = getattr(g, 'correlation_id', 'unknown')
+    return jsonify({'error': 'Internal server error', 'trace_id': correlation_id}), 500
 
 # ===== STARTUP/SHUTDOWN =====
-@app.before_first_request
+_initialized = False
+
+@app.before_request
 def startup():
-    """Initialize on first request"""
-    init_database()
+    """Initialize on first request (Flask 3.x compatible)"""
+    global _initialized
+    if not _initialized:
+        init_database()
+        _initialized = True
 
 def shutdown_handler(signum, frame):
     """Graceful shutdown"""

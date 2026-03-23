@@ -2,13 +2,13 @@
 -- Creates proper users, roles, and schemas with security best practices
 
 -- Create app user with limited permissions
-CREATE USER neuroshield_app WITH PASSWORD :'app_password';
+CREATE USER neuroshield_app WITH PASSWORD 'nA1bC2dE3fG4hI5jK6lM7nO8pQ9rS0tU1vW2xY3zA4bC5dE6fG7';
 
 -- Create backup user
-CREATE USER neuroshield_backup WITH PASSWORD :'backup_password';
+CREATE USER neuroshield_backup WITH PASSWORD 'kZ9yX8wV7uT6sR5qP4oN3mL2kJ1iH0gF9eD8cB7aZ6yX5wV4uT';
 
 -- Create read-only user for monitoring
-CREATE USER neuroshield_readonly WITH PASSWORD :'readonly_password';
+CREATE USER neuroshield_readonly WITH PASSWORD 'neuroshield_readonly_password';
 
 -- Grant minimal permissions to app user
 GRANT CONNECT ON DATABASE neuroshield_db TO neuroshield_app;
