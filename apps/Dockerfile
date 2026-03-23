@@ -1,12 +1,12 @@
-FROM node:20-alpine
+FROM node:20-slim
 
 WORKDIR /app
 
 # Copy package files
 COPY apps/package*.json ./
 
-# Install dependencies
-RUN npm ci --only=production
+# Install dependencies with verbose output for debugging
+RUN npm install --loglevel=verbose
 
 # Copy application
 COPY apps/backend.js .
@@ -23,3 +23,4 @@ EXPOSE 5000
 
 # Run application
 CMD ["node", "backend.js"]
+
