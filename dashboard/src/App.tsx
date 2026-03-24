@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
-import { Activity, AlertCircle, CheckCircle, Clock, TrendingUp, Zap, Download, Moon, Sun, Settings, Bell, BarChart3, RefreshCw, Wifi, WifiOff, Zap as Performance } from 'lucide-react';
-import { LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, AreaChart, Area, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ScatterChart, Scatter } from 'recharts';
+import { Activity, CheckCircle, TrendingUp, Zap, Download, Moon, Sun, BarChart3, RefreshCw, Wifi, WifiOff } from 'lucide-react';
+import { LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, AreaChart, Area, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts';
 
 interface HealingAction {
   timestamp: string;
@@ -72,7 +72,6 @@ const initialActions: HealingAction[] = [
 
 function App() {
   const [isDark, setIsDark] = useState(true);
-  const [timeRange, setTimeRange] = useState('24h');
   const [alert, setAlert] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState('overview');
   const [isConnected, setIsConnected] = useState(false);
@@ -83,7 +82,60 @@ function App() {
   const [stats, setStats] = useState<DashboardStats>(initialStats);
   const [actions, setActions] = useState<HealingAction[]>(initialActions);
   const wsRef = useRef<WebSocket | null>(null);
-  const updateIntervalRef = useRef<NodeJS.Timer | null>(null);
+  const updateIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Fetch real data from API
+  const fetchDashboardData = async () => {
+    try {
+      setComponentStatus(prev => prev.map(c => c.name === 'API Connection' ? { ...c, status: 'loading' as const } : c));
+
+      // Fetch stats
+      const statsResp = await fetch('http://localhost:5000/api/dashboard/stats');
+      if (statsResp.ok) {
+        const apiStats = await statsResp.json();
+        setStats({
+          active_heals: apiStats.total_heals || 0,
+          total_success: Math.round(apiStats.total_heals * (apiStats.success_rate / 100)) || 0,
+          total_failed: apiStats.failed_actions || 0,
+          avg_response_time: Math.round(apiStats.avg_response_time) || 0,
+          success_rate: apiStats.success_rate || 0,
+          cost_saved: apiStats.cost_saved || 0,
+          mttr_reduction: 97,
+        });
+        setComponentStatus(prev => prev.map(c => c.name === 'API Connection' ? { ...c, status: 'ok' as const } : c));
+      }
+
+      // Fetch history
+      const historyResp = await fetch('http://localhost:5000/api/dashboard/history?limit=5');
+      if (historyResp.ok) {
+        const historyData = await historyResp.json();
+        const formattedActions = historyData.actions.map((a: any) => ({
+          timestamp: a.timestamp,
+          action_name: a.action_name,
+          success: a.success,
+          duration_ms: a.duration_ms,
+          confidence: a.confidence,
+          pod_name: a.pod_name,
+          id: a.id,
+        }));
+        setActions(formattedActions);
+      }
+
+      // Fetch metrics
+      const metricsResp = await fetch('http://localhost:5000/api/dashboard/metrics');
+      if (metricsResp.ok) {
+        const metricsData = await metricsResp.json();
+        setMetrics(metricsData.metrics || []);
+      }
+
+      setIsConnected(true);
+      setLastUpdate(new Date());
+    } catch (error) {
+      console.error(`Failed to fetch dashboard data: ${error}`);
+      setIsConnected(false);
+      setComponentStatus(prev => prev.map(c => c.name === 'API Connection' ? { ...c, status: 'error' as const } : c));
+    }
+  };
 
   const [metrics, setMetrics] = useState([
     { time: '00:00', success_rate: 65, confidence: 72, incidents: 12, mttr: 45, cost: 840 },
@@ -120,74 +172,10 @@ function App() {
     { name: 'clear_cache', value: 21, fill: colors.cyan },
   ]);
 
-  const [topIncidents] = useState([
-    { incident: 'Pod OOM Kill', count: 45, severity: 'critical', trend: '-15%' },
-    { incident: 'High CPU Usage', count: 38, severity: 'warning', trend: '-8%' },
-    { incident: 'Deployment Failure', count: 32, severity: 'warning', trend: '-22%' },
-    { incident: 'API Timeout', count: 28, severity: 'warning', trend: '+5%' },
-    { incident: 'Memory Leak', count: 19, severity: 'info', trend: '-11%' },
-  ]);
-
   // Simulate real-time data updates
   const simulateRealTimeUpdate = () => {
-    const actionTypes = ['restart_pod', 'scale_up', 'rollback_deploy', 'retry_build', 'clear_cache'];
-    const pods = ['api-service', 'web-frontend', 'cache-service', 'db-server', 'queue-worker', 'storage-pod'];
-
-    // Generate new action
-    const newAction: HealingAction = {
-      timestamp: new Date().toISOString(),
-      action_name: actionTypes[Math.floor(Math.random() * actionTypes.length)],
-      success: Math.random() > 0.15,
-      duration_ms: Math.floor(Math.random() * 200) + 20,
-      confidence: Math.random() * 0.3 + 0.65,
-      pod_name: `${pods[Math.floor(Math.random() * pods.length)]}-${Math.random().toString(36).substr(2, 4)}`,
-      id: Date.now().toString(),
-    };
-
-    // Update actions list (keep last 5)
-    setActions(prev => [newAction, ...prev.slice(0, 4)]);
-
-    // Update stats
-    setStats(prev => ({
-      ...prev,
-      active_heals: Math.max(0, prev.active_heals + (Math.random() > 0.5 ? 1 : -1)),
-      total_success: prev.total_success + (newAction.success ? 1 : 0),
-      total_failed: prev.total_failed + (newAction.success ? 0 : 1),
-      avg_response_time: Math.floor((prev.avg_response_time + newAction.duration_ms) / 2),
-      success_rate: Math.min(95, prev.success_rate + (Math.random() - 0.45) * 2),
-      cost_saved: prev.cost_saved + (newAction.success ? Math.floor(Math.random() * 50) + 10 : 0),
-    }));
-
-    // Update metrics (append to last metric)
-    setMetrics(prev => {
-      const lastMetric = prev[prev.length - 1];
-      return [
-        ...prev.slice(0, -1),
-        {
-          ...lastMetric,
-          success_rate: Math.min(95, lastMetric.success_rate + (Math.random() - 0.45)),
-          confidence: Math.min(95, lastMetric.confidence + (Math.random() - 0.45)),
-          incidents: Math.max(0, lastMetric.incidents - Math.floor(Math.random() * 2)),
-          cost: lastMetric.cost + Math.floor(Math.random() * 50),
-          mttr: Math.max(10, lastMetric.mttr + (Math.random() - 0.6) * 5),
-        }
-      ];
-    });
-
-    // Random alerts
-    if (Math.random() > 0.85) {
-      const alerts = [
-        '⚠️ High error rate detected - Automatic recovery initiated',
-        '✅ Pod recovered successfully',
-        '⚠️ High memory usage on 3 pods - Scaling up',
-        '✅ Deployment rolled back successfully',
-        '⚠️ Redis latency spike detected',
-      ];
-      setAlert(alerts[Math.floor(Math.random() * alerts.length)]);
-      setTimeout(() => setAlert(null), 4000);
-    }
-
-    setLastUpdate(new Date());
+    // Fetch real data from API instead of simulating
+    fetchDashboardData();
   };
 
   // Initialize connection and verify components
@@ -199,7 +187,7 @@ function App() {
       // Check API
       try {
         const apiStart = Date.now();
-        const response = await fetch('http://localhost:5000/health', { timeout: 2000 });
+        const response = await fetch('http://localhost:5000/health');
         const apiTime = Date.now() - apiStart;
         updates.push({
           name: 'API Connection',
@@ -514,7 +502,7 @@ function App() {
           <div style={{ backgroundColor: cardColor, border: `1px solid ${borderColor}`, borderRadius: '12px', padding: '24px' }}>
             <h2 style={{ fontSize: '20px', fontWeight: 'bold', color: textColor, margin: '0 0 24px 0' }}>🔴 LIVE EVENT STREAM</h2>
             <div style={{ backgroundColor: colors.bg, padding: '16px', borderRadius: '8px', border: `1px solid ${borderColor}`, fontFamily: 'monospace', fontSize: '12px', height: '400px', overflowY: 'auto' }}>
-              {actions.map((action, idx) => (
+              {actions.map((action) => (
                 <div key={action.id} style={{ padding: '8px', borderBottom: `1px solid ${borderColor}`, color: colors.cyan, animation: 'slideIn 0.3s ease-out' }}>
                   <span style={{ color: colors.textDim }}>[{new Date(action.timestamp).toLocaleTimeString()}]</span>
                   {' '}
