@@ -581,6 +581,205 @@ def dashboard_metrics():
         logger.error(f'Dashboard metrics error: {e}')
         return jsonify({'error': str(e), 'trace_id': getattr(g, 'correlation_id', 'unknown')}), 500
 
+# ===== FAILURE TRIGGER ENDPOINTS (For Testing) =====
+
+@app.route('/api/trigger/jenkins-failure', methods=['POST'])
+@limiter.limit("10/minute")
+def trigger_jenkins_failure():
+    """Simulate a Jenkins build failure to trigger orchestrator"""
+    try:
+        g.correlation_id = getattr(g, 'correlation_id', str(uuid4()))
+        logger.warning(f"[TEST] Simulating Jenkins build failure - {g.correlation_id}")
+
+        # Create failure event in healing log
+        failure_event = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "action_id": 999,
+            "action_name": "detect_failure",
+            "success": False,
+            "duration_ms": 100,
+            "detail": "TEST: Jenkins build failure triggered",
+            "context": {
+                "build_number": "test-build-001",
+                "affected_service": "dummy-app",
+                "failure_prob": "0.95",
+                "failure_pattern": "BuildFailure"
+            }
+        }
+
+        # Append to healing log
+        healing_log_path = 'data/healing_log.json'
+        with open(healing_log_path, 'a') as f:
+            f.write(json.dumps(failure_event) + '\n')
+
+        logger.info(f"Jenkins failure event created - {g.correlation_id}")
+        return jsonify({
+            'status': 'failure_triggered',
+            'event': failure_event,
+            'trace_id': g.correlation_id,
+            'next_step': 'Orchestrator will detect and respond',
+            'watch_at': 'http://localhost:5173'
+        }), 201
+    except Exception as e:
+        logger.error(f'Trigger jenkins failure error: {e}')
+        return jsonify({'error': str(e), 'trace_id': getattr(g, 'correlation_id', 'unknown')}), 500
+
+@app.route('/api/trigger/pod-crash', methods=['POST'])
+@limiter.limit("10/minute")
+def trigger_pod_crash():
+    """Simulate a pod crash to trigger restart healing"""
+    try:
+        g.correlation_id = getattr(g, 'correlation_id', str(uuid4()))
+        logger.warning(f"[TEST] Simulating pod crash - {g.correlation_id}")
+
+        failure_event = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "action_id": 999,
+            "action_name": "pod_restart_needed",
+            "success": False,
+            "duration_ms": 50,
+            "detail": "TEST: Pod crash detected",
+            "context": {
+                "affected_service": "api-service",
+                "pod_name": "api-service-xyz",
+                "failure_prob": "0.99",
+                "failure_pattern": "PodCrash"
+            }
+        }
+
+        healing_log_path = 'data/healing_log.json'
+        with open(healing_log_path, 'a') as f:
+            f.write(json.dumps(failure_event) + '\n')
+
+        logger.info(f"Pod crash event created - {g.correlation_id}")
+        return jsonify({
+            'status': 'pod_crash_triggered',
+            'suggested_action': 'restart_pod',
+            'pod': 'api-service-xyz',
+            'trace_id': g.correlation_id,
+            'expected_healing': 'Pod will be automatically restarted'
+        }), 201
+    except Exception as e:
+        logger.error(f'Trigger pod crash error: {e}')
+        return jsonify({'error': str(e), 'trace_id': getattr(g, 'correlation_id', 'unknown')}), 500
+
+@app.route('/api/trigger/cpu-spike', methods=['POST'])
+@limiter.limit("10/minute")
+def trigger_cpu_spike():
+    """Simulate high CPU to trigger scale-up healing"""
+    try:
+        g.correlation_id = getattr(g, 'correlation_id', str(uuid4()))
+        logger.warning(f"[TEST] Simulating CPU spike - {g.correlation_id}")
+
+        failure_event = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "action_id": 999,
+            "action_name": "high_cpu_detected",
+            "success": False,
+            "duration_ms": 75,
+            "detail": "TEST: High CPU detected",
+            "context": {
+                "affected_service": "web-frontend",
+                "cpu_usage": "95%",
+                "failure_prob": "0.92",
+                "failure_pattern": "HighCPU"
+            }
+        }
+
+        healing_log_path = 'data/healing_log.json'
+        with open(healing_log_path, 'a') as f:
+            f.write(json.dumps(failure_event) + '\n')
+
+        logger.info(f"CPU spike event created - {g.correlation_id}")
+        return jsonify({
+            'status': 'cpu_spike_triggered',
+            'suggested_action': 'scale_up',
+            'current_cpu': '95%',
+            'trace_id': g.correlation_id,
+            'expected_healing': 'Service will be scaled up automatically'
+        }), 201
+    except Exception as e:
+        logger.error(f'Trigger CPU spike error: {e}')
+        return jsonify({'error': str(e), 'trace_id': getattr(g, 'correlation_id', 'unknown')}), 500
+
+@app.route('/api/test/full-demo-flow', methods=['POST'])
+@limiter.limit("5/minute")
+def trigger_full_demo_flow():
+    """Trigger a complete healing flow: Failure → Detection → Healing → Recovery"""
+    try:
+        g.correlation_id = getattr(g, 'correlation_id', str(uuid4()))
+        logger.info(f"[DEMO] Full flow test started - {g.correlation_id}")
+
+        healing_log_path = 'data/healing_log.json'
+
+        # Step 1: Failure Detection
+        failure = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "action_id": 999,
+            "action_name": "demo_failure",
+            "success": False,
+            "duration_ms": 100,
+            "detail": "DEMO: Build pipeline failure",
+            "context": {
+                "build_number": "demo-build-001",
+                "affected_service": "demo-app",
+                "failure_prob": "0.95",
+                "failure_pattern": "DemoFailure"
+            }
+        }
+
+        # Step 2: Healing Action
+        healing = {
+            "timestamp": (datetime.utcnow() + timedelta(seconds=2)).isoformat(),
+            "action_id": 1000,
+            "action_name": "restart_pod",
+            "success": True,
+            "duration_ms": 150,
+            "detail": "DEMO: Pod restarted automatically",
+            "context": {
+                "pod_name": "demo-app-abc123",
+                "action_triggered_by": "demo_flow",
+                "ml_confidence": "0.92"
+            }
+        }
+
+        # Step 3: Recovery
+        recovery = {
+            "timestamp": (datetime.utcnow() + timedelta(seconds=4)).isoformat(),
+            "action_id": 1001,
+            "action_name": "verify_health",
+            "success": True,
+            "duration_ms": 80,
+            "detail": "DEMO: Service health restored",
+            "context": {
+                "service": "demo-app",
+                "status": "healthy",
+                "response_time": "52ms"
+            }
+        }
+
+        # Write all events
+        with open(healing_log_path, 'a') as f:
+            f.write(json.dumps(failure) + '\n')
+            f.write(json.dumps(healing) + '\n')
+            f.write(json.dumps(recovery) + '\n')
+
+        logger.info(f"Full demo flow created - {g.correlation_id}")
+        return jsonify({
+            'status': 'demo_flow_triggered',
+            'trace_id': g.correlation_id,
+            'flow': [
+                {'step': 1, 'time': '0s', 'event': 'Failure detected (build failure)', 'action': 'detect'},
+                {'step': 2, 'time': '2s', 'event': 'Healing action executed (restart pod)', 'action': 'restart_pod'},
+                {'step': 3, 'time': '4s', 'event': 'Service recovered and healthy', 'action': 'verify'}
+            ],
+            'instructions': 'Open dashboard at http://localhost:5173 and refresh to see the new events',
+            'next_action': 'Check healing_log.json for new entries'
+        }), 201
+    except Exception as e:
+        logger.error(f'Full demo flow error: {e}')
+        return jsonify({'error': str(e), 'trace_id': getattr(g, 'correlation_id', 'unknown')}), 500
+
 @app.errorhandler(429)
 def rate_limit_exceeded(e):
     """Handle rate limit"""
