@@ -31,6 +31,21 @@ interface Service {
   uptime: number;
 }
 
+interface Metric {
+  time?: string;
+  timestamp?: string;
+  success_rate?: number;
+  confidence?: number;
+  incidents?: number;
+  mttr?: number;
+  cost?: number;
+  cpu?: number;
+  memory?: number;
+  error_rate?: number;
+  response_time?: number;
+  pod_restarts?: number;
+}
+
 interface ComponentStatus {
   name: string;
   status: 'ok' | 'loading' | 'error';
@@ -86,40 +101,70 @@ function App() {
   const updateIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const simulationIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Healing action types for simulation
-  const actionTypes = ['restart_pod', 'scale_up', 'retry_build', 'rollback_deploy', 'clear_cache', 'escalate_to_human'];
+  // Healing action pod names for simulation
   const podNames = ['api-service', 'frontend', 'backend', 'database', 'cache-layer', 'load-balancer'];
 
-  // Generate simulated incident
+  // Generate realistic incident based on system state
   const generateSimulatedIncident = (): HealingAction => {
     const now = new Date();
+    const lastMetric = metrics[metrics.length - 1];
+
+    let action = 'restart_pod';
+    let probability = 0.15;
+
+    // Make incidents realistic based on metrics
+    if (lastMetric) {
+      if ((lastMetric.cpu ?? 0) > 85) {
+        action = 'scale_up';
+        probability = 0.6;
+      } else if ((lastMetric.memory ?? 0) > 85) {
+        action = 'restart_pod';
+        probability = 0.5;
+      } else if ((lastMetric.error_rate ?? 0) > 5) {
+        action = 'retry_build';
+        probability = 0.7;
+      } else if ((lastMetric.pod_restarts ?? 0) > 3) {
+        action = 'rollback_deploy';
+        probability = 0.4;
+      }
+    }
+
+    // Only generate incident with realistic probability
+    if (Math.random() > probability) {
+      return null as any; // Skip this interval
+    }
+
     return {
       timestamp: now.toISOString(),
-      action_name: actionTypes[Math.floor(Math.random() * actionTypes.length)],
-      success: Math.random() > 0.15,
-      duration_ms: Math.floor(Math.random() * 500) + 50,
-      confidence: Math.random() * 0.4 + 0.6,
+      action_name: action,
+      success: Math.random() > 0.1,  // 90% healing success
+      duration_ms: Math.floor(Math.random() * 1500) + 200,
+      confidence: 0.75 + Math.random() * 0.2,
       pod_name: podNames[Math.floor(Math.random() * podNames.length)],
       id: `sim-${Date.now()}-${Math.random()}`,
     };
   };
 
-  // Simulate real-time incidents
+  // Simulate realistic incidents
   const simulateIncidents = () => {
     if (!simulationActive) return;
 
+    const incident = generateSimulatedIncident();
+    if (!incident) return; // Skip if no incident this interval
+
     setActions(prev => {
-      const newIncident = generateSimulatedIncident();
-      const combined = [newIncident, ...prev.slice(0, 9)]; // Keep last 10
+      const combined = [incident, ...prev.slice(0, 9)]; // Keep last 10
       return combined;
     });
 
+    // Update stats
     setStats(prev => ({
       ...prev,
       active_heals: prev.active_heals + 1,
-      total_success: Math.random() > 0.15 ? prev.total_success + 1 : prev.total_success,
-      total_failed: Math.random() <= 0.15 ? prev.total_failed + 1 : prev.total_failed,
-      success_rate: (prev.total_success / (prev.active_heals + 1)) * 100,
+      total_success: incident.success ? prev.total_success + 1 : prev.total_success,
+      total_failed: incident.success ? prev.total_failed : prev.total_failed + 1,
+      success_rate: ((prev.total_success + (incident.success ? 1 : 0)) / (prev.active_heals + 1)) * 100,
+      cost_saved: (prev.cost_saved || 0) + (incident.success ? 12.5 : 0), // ₹12.50 per heal
     }));
   };
 
@@ -162,10 +207,12 @@ function App() {
       }
 
       // Fetch metrics
-      const metricsResp = await fetch('http://localhost:5000/api/dashboard/metrics');
+      const metricsResp = await fetch('http://localhost:5000/api/dashboard/system-metrics');
       if (metricsResp.ok) {
         const metricsData = await metricsResp.json();
-        setMetrics(metricsData.metrics || []);
+        if (metricsData.metrics && metricsData.metrics.length > 0) {
+          setMetrics(metricsData.metrics);
+        }
       }
 
       setIsConnected(true);
@@ -177,7 +224,7 @@ function App() {
     }
   };
 
-  const [metrics, setMetrics] = useState([
+  const [metrics, setMetrics] = useState<Metric[]>([
     { time: '00:00', success_rate: 65, confidence: 72, incidents: 12, mttr: 45, cost: 840 },
     { time: '04:00', success_rate: 72, confidence: 75, incidents: 10, mttr: 38, cost: 700 },
     { time: '08:00', success_rate: 78, confidence: 80, incidents: 8, mttr: 32, cost: 560 },

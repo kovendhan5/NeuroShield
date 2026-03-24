@@ -581,6 +581,45 @@ def dashboard_metrics():
         logger.error(f'Dashboard metrics error: {e}')
         return jsonify({'error': str(e), 'trace_id': getattr(g, 'correlation_id', 'unknown')}), 500
 
+@app.route('/api/dashboard/system-metrics', methods=['GET'])
+@limiter.limit("60/minute")
+def dashboard_system_metrics():
+    """Get realistic system metrics for charts (CPU, memory, response time)"""
+    try:
+        g.correlation_id = getattr(g, 'correlation_id', str(uuid4()))
+        metrics_path = 'data/system_metrics.json'
+
+        if os.path.exists(metrics_path):
+            with open(metrics_path, 'r') as f:
+                data = json.load(f)
+                # Transform metrics to chart-friendly format
+                chart_data = []
+                for m in data.get('metrics', []):
+                    timestamp = m.get('timestamp', '')
+                    # Format time for charts
+                    try:
+                        dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                        time_label = dt.strftime('%H:%M')
+                    except:
+                        time_label = timestamp[:5]
+
+                    chart_data.append({
+                        'time': time_label,
+                        'cpu': round(m.get('cpu', 0), 1),
+                        'memory': round(m.get('memory', 0), 1),
+                        'error_rate': round(m.get('error_rate', 0) * 100, 1),
+                        'response_time': round(m.get('response_time', 0), 1),
+                        'pod_restarts': m.get('pod_restarts', 0),
+                    })
+
+                return jsonify({'metrics': chart_data, 'count': len(chart_data)}), 200
+
+        # Fallback if file doesn't exist
+        return jsonify({'metrics': [], 'count': 0, 'notice': 'No system metrics data'}), 200
+    except Exception as e:
+        logger.error(f'System metrics error: {e}')
+        return jsonify({'error': str(e), 'trace_id': getattr(g, 'correlation_id', 'unknown')}), 500
+
 # ===== FAILURE TRIGGER ENDPOINTS (For Testing) =====
 
 @app.route('/api/trigger/jenkins-failure', methods=['POST'])
