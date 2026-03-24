@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Activity, AlertCircle, CheckCircle, Clock, TrendingUp, Server, Zap } from 'lucide-react';
+import { Activity, AlertCircle, CheckCircle, Clock, TrendingUp, Zap } from 'lucide-react';
 import { LineChart, Line, BarChart, Bar, ResponsiveContainer, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts';
 import './App.css';
 
@@ -35,7 +35,7 @@ function App() {
     { timestamp: '2026-03-24T11:52:45Z', action_name: 'rollback_deploy', success: true, duration_ms: 120, confidence: 0.92, pod_name: 'frontend-5x2k' },
   ]);
 
-  const [metrics, setMetrics] = useState([
+  const [metrics] = useState([
     { time: '00:00', success_rate: 65, confidence: 72, incidents: 12 },
     { time: '04:00', success_rate: 72, confidence: 75, incidents: 10 },
     { time: '08:00', success_rate: 78, confidence: 80, incidents: 8 },
