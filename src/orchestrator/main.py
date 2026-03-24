@@ -1038,6 +1038,82 @@ def main() -> None:
                     remaining = int(HEAL_COOLDOWN_S - (time.time() - _read_cooldown_ts()))
                     print(f"\n  Status: Cooldown active \u2014 {remaining}s remaining before next heal")
                 else:
+                    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                    # NEW: CI/CD Failure Classification & Auto-Fix
+                    # Priority: Try CI/CD fixes BEFORE infrastructure actions
+                    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                    cicd_fix_attempted = False
+                    cicd_fix_success = False
+
+                    # Only attempt CI/CD fixes for build failures
+                    if build_status in ("FAILURE", "UNSTABLE", "ABORTED"):
+                        try:
+                            from src.prediction.failure_classifier import classify_failure
+                            from src.orchestrator.cicd_fixer import fix_cicd_failure
+
+                            # Step 1: Classify the failure type
+                            classification = classify_failure(log_text, telemetry_dict)
+                            failure_type = classification.failure_type
+                            confidence = classification.confidence
+
+                            print(f"\n  CI/CD Failure Analysis:")
+                            print(f"    Type:       {failure_type}")
+                            print(f"    Confidence: {confidence:.2f}")
+                            print(f"    Details:    {classification.details}")
+
+                            # Step 2: Attempt automated fix for actionable types
+                            # (DEPENDENCY, CONFIG, TEST, BUILD - not INFRASTRUCTURE)
+                            if failure_type in ("DEPENDENCY", "CONFIG", "TEST", "BUILD") and confidence > 0.5:
+                                print(f"\n  Attempting CI/CD Auto-Fix...")
+                                cicd_fix_attempted = True
+
+                                fix_result = fix_cicd_failure(
+                                    failure_type=failure_type,
+                                    log_text=log_text,
+                                    job_name=job_name,
+                                    build_number=build_num,
+                                    telemetry=telemetry_dict,
+                                    dry_run=False,  # Real execution
+                                )
+
+                                print(f"    Fix Type:   {fix_result.fix_type}")
+                                print(f"    Success:    {fix_result.success}")
+                                print(f"    Details:    {fix_result.details}")
+
+                                if fix_result.success:
+                                    cicd_fix_success = True
+                                    print(f"    ✓ CI/CD fix applied successfully")
+                                    print(f"    → Recommendation: Retry build to verify fix")
+
+                                    # Log the fix for audit
+                                    _append_csv("data/cicd_fix_log.csv", {
+                                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                                        "build_number": str(build_num),
+                                        "failure_type": failure_type,
+                                        "fix_type": fix_result.fix_type,
+                                        "success": str(fix_result.success),
+                                        "duration_ms": f"{fix_result.duration_ms:.0f}",
+                                    })
+
+                        except Exception as e:
+                            logging.warning(f"CI/CD classification/fix failed: {e}")
+                            # Continue to infrastructure actions as fallback
+
+                    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                    # EXISTING: Infrastructure Action Logic (Fallback)
+                    # Only execute if CI/CD fix didn't succeed
+                    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+                    # Skip infrastructure action if CI/CD fix succeeded
+                    if cicd_fix_success:
+                        print(f"\n  Skipping infrastructure action (CI/CD fix succeeded)")
+                        # Mark build as handled but don't execute infra action
+                        if build_num is not None:
+                            last_healed_build = build_num
+                        last_heal_time = time.time()
+                        _write_cooldown_ts()
+                        continue  # Skip to next cycle
+
                     # Use PPO to choose action initially
                     if policy is not None:
                         action, _ = policy.predict(state_52d, deterministic=True)
