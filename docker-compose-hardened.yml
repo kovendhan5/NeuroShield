@@ -225,7 +225,7 @@ services:
       - "127.0.0.1:8080:8080"  # Use reverse proxy!
       - "50000:50000"
     environment:
-      JENKINS_OPTS: "--httpPort=8080 --prefix=/jenkins --argumentsRealm.passwd.admin=${JENKINS_PASSWORD}"
+      JENKINS_OPTS: "--httpPort=8080 --argumentsRealm.passwd.admin=${JENKINS_PASSWORD}"
       JAVA_OPTS: "-Xmx512m -Xms256m"
     volumes:
       - jenkins_data:/var/jenkins_home
