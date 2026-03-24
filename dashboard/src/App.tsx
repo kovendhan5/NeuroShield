@@ -78,11 +78,50 @@ function App() {
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [updateFrequency, setUpdateFrequency] = useState('5s');
   const [showVerification, setShowVerification] = useState(false);
+  const [simulationActive, setSimulationActive] = useState(true);
 
   const [stats, setStats] = useState<DashboardStats>(initialStats);
   const [actions, setActions] = useState<HealingAction[]>(initialActions);
   const wsRef = useRef<WebSocket | null>(null);
   const updateIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const simulationIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Healing action types for simulation
+  const actionTypes = ['restart_pod', 'scale_up', 'retry_build', 'rollback_deploy', 'clear_cache', 'escalate_to_human'];
+  const podNames = ['api-service', 'frontend', 'backend', 'database', 'cache-layer', 'load-balancer'];
+
+  // Generate simulated incident
+  const generateSimulatedIncident = (): HealingAction => {
+    const now = new Date();
+    return {
+      timestamp: now.toISOString(),
+      action_name: actionTypes[Math.floor(Math.random() * actionTypes.length)],
+      success: Math.random() > 0.15,
+      duration_ms: Math.floor(Math.random() * 500) + 50,
+      confidence: Math.random() * 0.4 + 0.6,
+      pod_name: podNames[Math.floor(Math.random() * podNames.length)],
+      id: `sim-${Date.now()}-${Math.random()}`,
+    };
+  };
+
+  // Simulate real-time incidents
+  const simulateIncidents = () => {
+    if (!simulationActive) return;
+
+    setActions(prev => {
+      const newIncident = generateSimulatedIncident();
+      const combined = [newIncident, ...prev.slice(0, 9)]; // Keep last 10
+      return combined;
+    });
+
+    setStats(prev => ({
+      ...prev,
+      active_heals: prev.active_heals + 1,
+      total_success: Math.random() > 0.15 ? prev.total_success + 1 : prev.total_success,
+      total_failed: Math.random() <= 0.15 ? prev.total_failed + 1 : prev.total_failed,
+      success_rate: (prev.total_success / (prev.active_heals + 1)) * 100,
+    }));
+  };
 
   // Fetch real data from API
   const fetchDashboardData = async () => {
@@ -93,15 +132,15 @@ function App() {
       const statsResp = await fetch('http://localhost:5000/api/dashboard/stats');
       if (statsResp.ok) {
         const apiStats = await statsResp.json();
-        setStats({
-          active_heals: apiStats.total_heals || 0,
-          total_success: Math.round(apiStats.total_heals * (apiStats.success_rate / 100)) || 0,
-          total_failed: apiStats.failed_actions || 0,
+        setStats(prev => ({
+          active_heals: (prev.active_heals || 0) + (apiStats.total_heals || 0),
+          total_success: Math.round((prev.active_heals || 0) * ((prev.success_rate || 0) / 100)) + Math.round(apiStats.total_heals * (apiStats.success_rate / 100)) || 0,
+          total_failed: (prev.total_failed || 0) + (apiStats.failed_actions || 0),
           avg_response_time: Math.round(apiStats.avg_response_time) || 0,
           success_rate: apiStats.success_rate || 0,
-          cost_saved: apiStats.cost_saved || 0,
+          cost_saved: (prev.cost_saved || 0) + (apiStats.cost_saved || 0),
           mttr_reduction: 97,
-        });
+        }));
         setComponentStatus(prev => prev.map(c => c.name === 'API Connection' ? { ...c, status: 'ok' as const } : c));
       }
 
@@ -109,7 +148,7 @@ function App() {
       const historyResp = await fetch('http://localhost:5000/api/dashboard/history?limit=5');
       if (historyResp.ok) {
         const historyData = await historyResp.json();
-        const formattedActions = historyData.actions.map((a: any) => ({
+        const realActions = historyData.actions.map((a: any) => ({
           timestamp: a.timestamp,
           action_name: a.action_name,
           success: a.success,
@@ -118,7 +157,8 @@ function App() {
           pod_name: a.pod_name,
           id: a.id,
         }));
-        setActions(formattedActions);
+        // Merge real + simulated (simulated first, then real)
+        setActions(prev => [...prev.slice(0, 5), ...realActions].slice(0, 10));
       }
 
       // Fetch metrics
@@ -230,11 +270,17 @@ function App() {
     simulateRealTimeUpdate();
     updateIntervalRef.current = setInterval(simulateRealTimeUpdate, intervalMs);
 
+    // Start simulation (generate incidents every 3 seconds)
+    if (simulationActive) {
+      simulationIntervalRef.current = setInterval(simulateIncidents, 3000);
+    }
+
     return () => {
       if (updateIntervalRef.current) clearInterval(updateIntervalRef.current);
+      if (simulationIntervalRef.current) clearInterval(simulationIntervalRef.current);
       if (wsRef.current) wsRef.current.close();
     };
-  }, [updateFrequency, metrics.length, services.length]);
+  }, [updateFrequency, metrics.length, services.length, simulationActive]);
 
   const exportData = () => {
     const report = {
@@ -375,7 +421,7 @@ function App() {
               <StatCard icon={<Activity size={20} />} label="Active Heals" value={`${stats.active_heals}`} trend="🔄 Real-time" color={colors.blue} />
               <StatCard icon={<CheckCircle size={20} />} label="Success Rate" value={`${stats.success_rate.toFixed(1)}%`} trend="↑ Improving" color={colors.green} />
               <StatCard icon={<TrendingUp size={20} />} label="Avg MTTR" value={`${stats.avg_response_time}ms`} trend="⚡ Fast" color={colors.purple} />
-              <StatCard icon={<BarChart3 size={20} />} label="Cost Saved" value={`$${stats.cost_saved}`} trend="💰 Growing" color={colors.amber} />
+              <StatCard icon={<BarChart3 size={20} />} label="Cost Saved" value={`₹${stats.cost_saved}`} trend="💰 Growing" color={colors.amber} />
             </div>
 
             {/* Charts */}
