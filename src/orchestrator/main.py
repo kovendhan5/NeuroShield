@@ -282,6 +282,14 @@ def _append_csv(path: str, row: Dict[str, str]) -> None:
         writer.writerow(row)
 
 
+def _append_ndjson(path: str, obj: Dict) -> None:
+    """Append a JSON object to NDJSON file (one JSON per line)."""
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with open(p, "a", encoding="utf-8") as f:
+        f.write(json.dumps(obj) + "\n")
+
+
 def _log_action_history(action_id: int, success: bool, duration_ms: float) -> None:
     """Record every healing action to data/action_history.csv."""
     _append_csv("data/action_history.csv", {
@@ -1101,7 +1109,7 @@ def main() -> None:
                         _write_brain_feed_event(action_name, failure_prob, success, 0)
 
                     # Log healing decision
-                    _append_csv("data/healing_log.csv", {
+                    csv_row = {
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                         "cycle": str(cycle_count),
                         "build_number": str(build_num),
@@ -1114,6 +1122,25 @@ def main() -> None:
                         "cpu": f"{prom_metrics['cpu_usage']:.1f}",
                         "memory": f"{prom_metrics['memory_usage']:.1f}",
                         "app_health": f"{app_health['health_pct']:.0f}",
+                    }
+                    _append_csv("data/healing_log.csv", csv_row)
+                    # Also write to JSON for dashboard
+                    _append_ndjson("data/healing_log.json", {
+                        "timestamp": csv_row["timestamp"],
+                        "action_id": int(csv_row["action_id"]),
+                        "action_name": csv_row["action_name"],
+                        "success": csv_row["success"].lower() == "true",
+                        "duration_ms": 0,
+                        "detail": f"Orchestrator healing: {csv_row['action_name']}",
+                        "context": {
+                            "build_number": csv_row["build_number"],
+                            "affected_service": _affected_service(),
+                            "failure_prob": csv_row["failure_prob"],
+                            "failure_pattern": csv_row["pattern"],
+                            "cpu_usage": csv_row["cpu"],
+                            "memory_usage": csv_row["memory"],
+                            "app_health": csv_row["app_health"],
+                        }
                     })
             else:
                 print(f"\n  Status: System healthy -- no intervention needed")
@@ -1285,7 +1312,7 @@ def run_single_cycle() -> Dict[str, str]:
         actual_mttr = time.time() - heal_start
         _log_mttr("manual_trigger", action_name, actual_mttr)
 
-    _append_csv("data/healing_log.csv", {
+    csv_row2 = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "cycle": "manual",
         "build_number": str(build.number if build else 0),
@@ -1296,6 +1323,22 @@ def run_single_cycle() -> Dict[str, str]:
         "action_name": action_name,
         "success": str(success),
         "cpu": "0", "memory": "0", "app_health": "0",
+    }
+    _append_csv("data/healing_log.csv", csv_row2)
+    # Also write to JSON for dashboard
+    _append_ndjson("data/healing_log.json", {
+        "timestamp": csv_row2["timestamp"],
+        "action_id": int(csv_row2["action_id"]),
+        "action_name": csv_row2["action_name"],
+        "success": csv_row2["success"].lower() == "true",
+        "duration_ms": int((time.time() - heal_start) * 1000) if success else 0,
+        "detail": f"Orchestrator manual trigger: {csv_row2['action_name']}",
+        "context": {
+            "build_number": csv_row2["build_number"],
+            "affected_service": _affected_service(),
+            "failure_prob": csv_row2["failure_prob"],
+            "failure_pattern": csv_row2["pattern"],
+        }
     })
 
     return {
