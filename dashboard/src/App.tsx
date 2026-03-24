@@ -334,6 +334,11 @@ function App() {
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+            {/* Simulation Control */}
+            <button onClick={() => setSimulationActive(!simulationActive)} style={{ padding: '8px 12px', borderRadius: '6px', backgroundColor: simulationActive ? colors.green : colors.amber, color: 'white', border: 'none', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <Zap size={16} /> {simulationActive ? 'Stop' : 'Start'} Simulation
+            </button>
+
             {/* Update Frequency */}
             <select value={updateFrequency} onChange={(e) => setUpdateFrequency(e.target.value)} style={{ padding: '8px 12px', borderRadius: '6px', backgroundColor: cardColor, color: textColor, border: `1px solid ${borderColor}`, fontSize: '12px', cursor: 'pointer' }}>
               <option value="1">Every 1s</option>
