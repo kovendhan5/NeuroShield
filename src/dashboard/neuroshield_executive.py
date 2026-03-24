@@ -16,10 +16,16 @@ import plotly.express as px
 from datetime import datetime, timedelta
 import json
 import sqlite3
-import psycopg2
-from psycopg2.extras import RealDictCursor
 import os
 from pathlib import Path
+
+# Optional database imports
+try:
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+    PSYCOPG2_AVAILABLE = True
+except ImportError:
+    PSYCOPG2_AVAILABLE = False
 
 # ============================================================================
 # PAGE CONFIG & STYLING
@@ -72,6 +78,8 @@ st.markdown("""
 @st.cache_resource
 def get_postgres_connection():
     """Connect to PostgreSQL database"""
+    if not PSYCOPG2_AVAILABLE:
+        return None
     try:
         conn = psycopg2.connect(
             host=os.getenv('DB_HOST', 'postgres'),
@@ -82,7 +90,6 @@ def get_postgres_connection():
         )
         return conn
     except Exception as e:
-        st.error(f"Database connection failed: {e}")
         return None
 
 @st.cache_resource
@@ -104,15 +111,21 @@ def get_sqlite_connection():
 
 @st.cache_data(ttl=10)
 def load_healing_actions(limit=100):
-    """Load recent healing actions from data/healing_log.json"""
+    """Load recent healing actions from data/healing_log.json (JSONL format)"""
     try:
         healing_log_path = Path("data/healing_log.json")
         if healing_log_path.exists():
             with open(healing_log_path) as f:
-                data = json.load(f)
-                if isinstance(data, list):
-                    df = pd.DataFrame(data[-limit:])
-                    df['timestamp'] = pd.to_datetime(df.get('timestamp', [datetime.now()]*len(df)))
+                lines = f.readlines()
+                data = [json.loads(line) for line in lines[-limit:] if line.strip()]
+                if data:
+                    df = pd.DataFrame(data)
+                    df['timestamp'] = pd.to_datetime(df.get('timestamp', pd.Series([datetime.now()]*len(df))))
+                    # Rename columns to match expected names
+                    if 'action_name' in df.columns and 'action' not in df.columns:
+                        df['action'] = df['action_name']
+                    if 'duration_ms' in df.columns and 'duration' not in df.columns:
+                        df['duration'] = df['duration_ms']
                     return df
     except Exception as e:
         st.warning(f"Could not load healing log: {e}")
@@ -444,8 +457,8 @@ def render_business_impact():
                          yaxis='y2', marker_color=['#ffd60a', '#00ccff']))
 
     fig.update_layout(
-        yaxis=dict(title='Time (minutes)', titlefont=dict(color='white'), tickfont=dict(color='white')),
-        yaxis2=dict(title='Cost ($)', titlefont=dict(color='white'), tickfont=dict(color='white'),
+        yaxis=dict(title='Time (minutes)', title_font=dict(color='white'), tickfont=dict(color='white')),
+        yaxis2=dict(title='Cost ($)', title_font=dict(color='white'), tickfont=dict(color='white'),
                    overlaying='y', side='right'),
         height=350,
         hovermode='x unified',
