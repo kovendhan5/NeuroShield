@@ -42,8 +42,10 @@
     ]
   },
   "devDependencies": {
+    "@tailwindcss/postcss": "^4.2.2",
     "autoprefixer": "^10.4.27",
     "axios": "^1.13.6",
+    "css-minimizer-webpack-plugin": "^3.4.1",
     "lucide-react": "^1.0.1",
     "postcss": "^8.5.8",
     "recharts": "^3.8.0",
