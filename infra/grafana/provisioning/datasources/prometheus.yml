@@ -4,8 +4,15 @@ datasources:
   - name: Prometheus
     type: prometheus
     access: proxy
-    url: http://prometheus:9090
+    orgId: 1
+    url: http://neuroshield-prometheus:9090
+    password: ''
+    user: ''
+    database: ''
+    basicAuth: false
     isDefault: true
-    editable: true
     jsonData:
-      timeInterval: 15s
+      graphiteVersion: '1.1'
+      tlsSkipVerify: true
+    version: 1
+    editable: true
