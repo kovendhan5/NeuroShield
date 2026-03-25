@@ -1,18 +1,20 @@
-﻿"""NeuroShield Orchestrator - Real-time CI/CD Monitoring."""
+"""NeuroShield Orchestrator - Real-time CI/CD Monitoring."""
 
 from __future__ import annotations
 
+import asyncio
 import csv
 import json
 import logging
 import os
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Dict, Optional, Tuple, TypeVar
+from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
 
 # Ensure project root is on sys.path for direct invocation
 _PROJECT_ROOT = str(Path(__file__).resolve().parents[2])
@@ -27,6 +29,7 @@ from stable_baselines3 import PPO
 from src.prediction.predictor import FailurePredictor, build_52d_state
 from src.utils.intelligence import detect_early_warning, explain_decision
 from src.config import validate_k8s_name, validate_positive_int
+from src.events.webhook_server import get_event_queue
 
 T = TypeVar("T")
 _RECENT_FIX_REDIS_KEY = "neuroshield:telemetry:recent_fix"
@@ -81,8 +84,13 @@ def retry_call(fn: Callable[[], T], max_attempts: int = 3, delay: int = 2) -> T:
         except Exception as e:
             if attempt == max_attempts - 1:
                 raise
-            time.sleep(delay * (2 ** attempt))
+            _blocking_wait(delay * (2 ** attempt))
     raise RuntimeError("retry_call exhausted")
+
+
+def _blocking_wait(seconds: float) -> None:
+    """Blocking wait helper used in sync subprocess paths."""
+    threading.Event().wait(seconds)
 
 ACTION_NAMES: Dict[int, str] = {
     0: "restart_pod",
@@ -381,7 +389,7 @@ def _ensure_port_forward(service: str = "dummy-app", port: int = 5000) -> None:
                 break
         except Exception:
             pass
-        time.sleep(3)
+        _blocking_wait(3)
 
     # Start new port-forward via service (survives pod replacement)
     try:
@@ -400,7 +408,7 @@ def _ensure_port_forward(service: str = "dummy-app", port: int = 5000) -> None:
                     return
             except Exception:
                 pass
-            time.sleep(1)
+            _blocking_wait(1)
 
         logging.warning("[PORT-FORWARD] Process started but health check failed")
     except Exception as exc:
@@ -464,7 +472,7 @@ def execute_healing_action(action_id: int, context: Dict[str, str]) -> bool:
                         success = True
                         detail = f"{ready}/{replicas} replicas ready"
                         break
-                    time.sleep(3)
+                    _blocking_wait(3)
                 if not success:
                     detail = f"timeout waiting for {replicas} replicas"
             else:
@@ -499,7 +507,7 @@ def execute_healing_action(action_id: int, context: Dict[str, str]) -> bool:
                 # Wait for new build to appear and finish (max 120s)
                 deadline = time.time() + 120
                 while time.time() < deadline:
-                    time.sleep(5)
+                    _blocking_wait(5)
                     new_build = get_latest_build_info(jenkins_url, job_name, username, token)
                     if new_build and new_build.number > pre_num and new_build.result not in (None, "RUNNING"):
                         success = new_build.result == "SUCCESS"
@@ -525,7 +533,7 @@ def execute_healing_action(action_id: int, context: Dict[str, str]) -> bool:
                     _ensure_port_forward(service)
                     # Verify health endpoint
                     app_url = _env("DUMMY_APP_URL", "http://localhost:5000")
-                    time.sleep(5)  # give pod time to start serving
+                    _blocking_wait(5)  # give pod time to start serving
                     try:
                         hr = requests.get(f"{app_url}/health", timeout=5)
                         success = hr.status_code == 200
@@ -537,6 +545,22 @@ def execute_healing_action(action_id: int, context: Dict[str, str]) -> bool:
                     detail = wait.stderr.strip()[:200]
             else:
                 detail = undo.stderr.strip()[:200]
+
+        elif action_id == 4:  # clear_cache
+            logging.info("[ACTION] clear_cache -- %s", service)
+            try:
+                app_url = _env("DUMMY_APP_URL", "http://localhost:5000")
+                response = requests.post(f"{app_url}/stress?cpu=0&memory=0", timeout=10)
+                success = response.status_code < 500
+                detail = f"cache clear via app endpoint ({response.status_code})"
+            except Exception as exc:
+                detail = f"clear_cache failed: {exc}"
+
+        elif action_id == 5:  # escalate_to_human
+            logging.error("[ACTION] escalate_to_human -- writing escalation report")
+            report_path = _write_escalation_report(context)
+            success = True
+            detail = f"escalation report created at {report_path.as_posix()}"
 
         else:
             logging.warning("Unknown action id: %s", action_id)
@@ -605,6 +629,20 @@ def _write_brain_feed_event(action_name: str, failure_prob: float, success: bool
 
     with open(p, "w", encoding="utf-8") as f:
         json.dump(events, f, indent=2)
+
+
+def _write_escalation_report(context: Dict[str, str]) -> Path:
+    report_dir = Path("data/escalation_reports")
+    report_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    report_path = report_dir / f"escalation_{ts}.json"
+    report_payload = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "context": context,
+        "reason": context.get("escalation_reason", "manual escalation"),
+    }
+    report_path.write_text(json.dumps(report_payload, indent=2), encoding="utf-8")
+    return report_path
 
 
 def _is_failure(result: str) -> bool:
@@ -884,29 +922,527 @@ def _print_status(label: str, ok: bool, extra: str = "") -> None:
     print(f"  [{icon}] {label:20s} {tag:8s}  {extra}")
 
 
-def main() -> None:
-    _setup_logging()
-    _load_env()
+@dataclass
+class OrchestratorState:
+    predictor: FailurePredictor
+    policy: Optional[PPO]
+    jenkins_url: str
+    jenkins_user: str
+    jenkins_token: str
+    job_name: str
+    self_ci_job: str
+    prom_url: str
+    app_url: str
+    poll_interval: int
+    namespace: str
+    cycle_count: int = 0
+    total_actions: int = 0
+    successful_actions: int = 0
+    last_build_number: Optional[int] = None
+    last_healed_build: Optional[int] = None
+    failure_detected_time: Optional[float] = None
+    prev_build_status: Optional[str] = None
+    mttr_measurements: List[float] = None
+    telemetry_history: List[Dict[str, Any]] = None
 
-    _print_banner()
-    
-    # Touch alive file immediately so healthcheck passes during model download
+    def __post_init__(self) -> None:
+        if self.mttr_measurements is None:
+            self.mttr_measurements = []
+        if self.telemetry_history is None:
+            self.telemetry_history = []
+
+
+_circuit_breaker: Dict[str, List[float]] = {}
+_circuit_open_until: Dict[str, float] = {}
+
+
+def _touch_alive_file() -> None:
     try:
-        with open("/tmp/orchestrator_alive", "w") as f:
-            f.write(str(time.time()))
+        Path('/tmp/orchestrator_alive').write_text(str(time.time()), encoding='utf-8')
     except Exception:
         pass
 
-    # Read config from .env
-    jenkins_url = _env("JENKINS_URL", "http://localhost:8080")
-    jenkins_user = _env("JENKINS_USERNAME", "admin")
-    jenkins_pass = _env("JENKINS_PASSWORD", "")
-    jenkins_token = _env("JENKINS_TOKEN", jenkins_pass)
-    job_name = _env("JENKINS_JOB", "build-pipeline")
-    self_ci_job = _env("SELF_CI_JOB", "neuroshield-ci")
-    prom_url = _env("PROMETHEUS_URL", "http://localhost:9090")
-    app_url = _env("DUMMY_APP_URL", "http://localhost:5000")
-    poll_interval = int(_env("POLL_INTERVAL", "15"))
+
+def _prune_circuit(failure_type: str, now_ts: float) -> None:
+    entries = _circuit_breaker.get(failure_type, [])
+    _circuit_breaker[failure_type] = [ts for ts in entries if now_ts - ts <= 300]
+
+
+def _is_circuit_open(failure_type: str, now_ts: Optional[float] = None) -> bool:
+    now = now_ts if now_ts is not None else time.time()
+    open_until = _circuit_open_until.get(failure_type)
+    if open_until is None:
+        return False
+    if now >= open_until:
+        _circuit_open_until.pop(failure_type, None)
+        _circuit_breaker.pop(failure_type, None)
+        return False
+    return True
+
+
+def _record_fix_failure(failure_type: str, now_ts: Optional[float] = None) -> bool:
+    now = now_ts if now_ts is not None else time.time()
+    _prune_circuit(failure_type, now)
+    entries = _circuit_breaker.setdefault(failure_type, [])
+    entries.append(now)
+    _prune_circuit(failure_type, now)
+    if len(_circuit_breaker.get(failure_type, [])) >= 3:
+        _circuit_open_until[failure_type] = now + 600
+        logging.error('Circuit breaker OPEN for %s — escalating', failure_type)
+        return True
+    return False
+
+
+def _record_fix_success(failure_type: str) -> None:
+    _circuit_breaker.pop(failure_type, None)
+    _circuit_open_until.pop(failure_type, None)
+
+
+async def escalate_to_human(context: Dict[str, str], reason: str) -> None:
+    esc_context = dict(context)
+    esc_context['escalation_reason'] = reason
+    await asyncio.to_thread(execute_healing_action, 5, esc_context)
+
+
+async def _execute_action_with_retry(action_id: int, context: Dict[str, str], failure_type: str) -> bool:
+    if _is_circuit_open(failure_type):
+        logging.error('Circuit breaker OPEN for %s — escalating', failure_type)
+        await escalate_to_human(context, f'Circuit breaker OPEN for {failure_type}')
+        return False
+
+    backoff = 2
+    for attempt in range(3):
+        success = await asyncio.to_thread(execute_healing_action, action_id, context)
+        if success:
+            _record_fix_success(failure_type)
+            return True
+
+        opened = _record_fix_failure(failure_type)
+        if opened:
+            await escalate_to_human(context, f'Circuit breaker OPEN for {failure_type}')
+            return False
+
+        if attempt < 2:
+            await asyncio.sleep(backoff)
+            backoff *= 2
+
+    await escalate_to_human(context, f'Fix failed after 3 retries for {failure_type}')
+    return False
+
+
+async def _execute_cicd_fix_with_retry(
+    failure_type: str,
+    log_text: str,
+    job_name: str,
+    build_num: int,
+    telemetry_dict: Dict[str, Any],
+) -> Tuple[bool, Optional[Any]]:
+    if _is_circuit_open(failure_type):
+        logging.error('Circuit breaker OPEN for %s — escalating', failure_type)
+        return False, None
+
+    from src.orchestrator.cicd_fixer import fix_cicd_failure
+
+    backoff = 2
+    last_result: Optional[Any] = None
+    for attempt in range(3):
+        fix_result = await asyncio.to_thread(
+            fix_cicd_failure,
+            failure_type=failure_type,
+            log_text=log_text,
+            job_name=job_name,
+            build_number=build_num,
+            telemetry=telemetry_dict,
+            dry_run=False,
+        )
+        last_result = fix_result
+        _publish_fix_telemetry_event(
+            action=fix_result.fix_type,
+            target=job_name,
+            success=fix_result.success,
+        )
+        if fix_result.success:
+            _record_fix_success(failure_type)
+            return True, fix_result
+
+        opened = _record_fix_failure(failure_type)
+        if opened:
+            return False, fix_result
+
+        if attempt < 2:
+            await asyncio.sleep(backoff)
+            backoff *= 2
+    return False, last_result
+
+
+async def consume_webhook_alerts(queue: asyncio.Queue) -> None:
+    webhook_queue = get_event_queue()
+    while True:
+        try:
+            event = await asyncio.to_thread(webhook_queue.get_event, 0.5)
+            if event is not None:
+                await queue.put({'type': 'webhook', 'payload': event})
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logging.exception('Webhook consumer error: %s', exc)
+            await asyncio.sleep(1)
+
+
+async def polling_loop(queue: asyncio.Queue, poll_interval: int) -> None:
+    while True:
+        await queue.put({'type': 'poll', 'timestamp': datetime.now(timezone.utc).isoformat()})
+        await asyncio.sleep(poll_interval)
+
+
+async def _process_cycle(state: OrchestratorState, trigger: Dict[str, Any]) -> None:
+    HEAL_COOLDOWN_S = 60
+    await asyncio.to_thread(_touch_alive_file)
+
+    state.cycle_count += 1
+    _print_cycle_header(state.cycle_count)
+    if trigger.get('type') == 'webhook':
+        payload = trigger.get('payload', {})
+        logging.info('Processing webhook event: %s', payload.get('type', 'unknown'))
+
+    jenkins_ok, jenkins_lat = await asyncio.to_thread(_check_service, f"{state.jenkins_url}/api/json", 5)
+    prom_ok, prom_lat = await asyncio.to_thread(_check_service, f"{state.prom_url}/-/healthy", 5)
+    app_ok, app_lat = await asyncio.to_thread(_check_service, state.app_url, 5)
+
+    if not app_ok:
+        await asyncio.to_thread(_ensure_port_forward)
+        await asyncio.sleep(3)
+        app_ok, app_lat = await asyncio.to_thread(_check_service, state.app_url, 5)
+
+    _print_status('Jenkins', jenkins_ok, f"{jenkins_lat:.0f}ms" if jenkins_ok else '')
+    _print_status('Prometheus', prom_ok, f"{prom_lat:.0f}ms" if prom_ok else '')
+    _print_status('Dummy App', app_ok, f"{app_lat:.0f}ms" if app_ok else '')
+
+    prom_metrics = await asyncio.to_thread(_collect_prometheus_metrics, state.prom_url) if prom_ok else {
+        'cpu_usage': 0.0, 'memory_usage': 0.0, 'pod_count': 0.0, 'error_rate': 0.0, 'pod_restarts': 0.0
+    }
+    app_health = await asyncio.to_thread(_collect_dummy_app_health, state.app_url) if app_ok else {
+        'health_pct': 0.0, 'response_ms': 0.0
+    }
+
+    build = None
+    log_text = ''
+    if jenkins_ok:
+        build = await asyncio.to_thread(
+            get_latest_build_info,
+            state.jenkins_url,
+            state.job_name,
+            state.jenkins_user,
+            state.jenkins_token,
+        )
+        if build:
+            log_text = await asyncio.to_thread(
+                get_build_log,
+                state.jenkins_url,
+                state.job_name,
+                build.number,
+                state.jenkins_user,
+                state.jenkins_token,
+            )
+
+    build_status = build.result if build else 'UNKNOWN'
+    build_num = build.number if build else 0
+    build_duration = build.duration_ms if build else 0
+
+    print('\n  Telemetry:')
+    print(f"    Build #{build_num}: {build_status} ({build_duration}ms)")
+    print(f"    CPU: {prom_metrics['cpu_usage']:.1f}%  |  Memory: {prom_metrics['memory_usage']:.1f}%")
+    print(f"    Pods: {prom_metrics['pod_count']:.0f}  |  Error Rate: {prom_metrics['error_rate']:.4f}")
+    print(f"    App Health: {app_health['health_pct']:.0f}%  |  Response: {app_health['response_ms']:.0f}ms")
+
+    await asyncio.to_thread(_save_telemetry_row, {
+        'timestamp': datetime.now(timezone.utc).isoformat(),
+        'jenkins_last_build_status': build_status,
+        'jenkins_last_build_duration': str(build_duration),
+        'jenkins_queue_length': '0',
+        'prometheus_cpu_usage': f"{prom_metrics['cpu_usage']:.2f}",
+        'prometheus_memory_usage': f"{prom_metrics['memory_usage']:.2f}",
+        'prometheus_pod_count': f"{prom_metrics['pod_count']:.0f}",
+        'prometheus_error_rate': f"{prom_metrics['error_rate']:.4f}",
+        'app_health_pct': f"{app_health['health_pct']:.0f}",
+        'app_response_ms': f"{app_health['response_ms']:.0f}",
+    })
+
+    if state.self_ci_job:
+        self_ci = await asyncio.to_thread(
+            _get_self_ci_build,
+            state.jenkins_url,
+            state.self_ci_job,
+            state.jenkins_user,
+            state.jenkins_token,
+        )
+        if self_ci and self_ci.get('result'):
+            sci_result = self_ci['result']
+            sci_num = self_ci.get('number', '?')
+            if sci_result in ('FAILURE', 'UNSTABLE', 'ABORTED'):
+                print(f"\n  Self-CI: Build #{sci_num} -> {sci_result}  ALERT")
+                await asyncio.to_thread(handle_self_ci_failure, self_ci)
+            else:
+                print(f"\n  Self-CI: Build #{sci_num} -> {sci_result}  OK")
+                await asyncio.to_thread(_update_self_ci_status_ok, self_ci)
+
+    telemetry_dict = {
+        'jenkins_last_build_status': build_status,
+        'jenkins_last_build_duration': build_duration,
+        'jenkins_queue_length': 0,
+        'prometheus_cpu_usage': prom_metrics['cpu_usage'],
+        'prometheus_memory_usage': prom_metrics['memory_usage'],
+        'prometheus_pod_count': prom_metrics['pod_count'],
+        'prometheus_error_rate': prom_metrics['error_rate'],
+        'pod_restart_count': prom_metrics.get('pod_restarts', 0.0),
+    }
+    if not log_text:
+        log_text = f'Build {build_num} status {build_status}'
+
+    failure_prob = await asyncio.to_thread(state.predictor.predict, log_text, telemetry_dict)
+    if failure_prob != failure_prob:
+        failure_prob = 0.5 if _is_failure(build_status) else 0.0
+
+    app_hp = app_health.get('health_pct', 100)
+    if app_hp < 100:
+        boosted = max(failure_prob, 0.78)
+        if boosted > failure_prob:
+            logging.info(
+                '[HEALTH] App degraded (health_pct=%.0f%%) -- boosting failure_prob %.3f -> %.3f',
+                app_hp,
+                failure_prob,
+                boosted,
+            )
+            failure_prob = boosted
+    telemetry_dict['app_health_pct'] = app_hp
+    prob_bar = '#' * int(failure_prob * 20) + '-' * (20 - int(failure_prob * 20))
+    prob_label = 'LOW' if failure_prob < 0.3 else 'MEDIUM' if failure_prob < 0.6 else 'HIGH' if failure_prob < 0.8 else 'CRITICAL'
+    print('\n  Prediction:')
+    print(f"    Failure Prob: [{prob_bar}] {failure_prob:.3f} ({prob_label})")
+
+    state.telemetry_history.append(telemetry_dict)
+    if len(state.telemetry_history) > 20:
+        state.telemetry_history = state.telemetry_history[-20:]
+    warn_action, warn_conf = detect_early_warning(state.telemetry_history)
+    if warn_action and failure_prob < 0.5:
+        print(f"    Early Warning: Trending toward {warn_action} (conf={warn_conf:.0%})")
+
+    jenkins_data = {'build_duration': build_duration, 'build_number': build_num, 'retry_count': 0}
+    prometheus_data = {
+        'cpu_avg_5m': prom_metrics['cpu_usage'],
+        'memory_avg_5m': prom_metrics['memory_usage'],
+        'pod_restarts': 0,
+        'node_count': prom_metrics['pod_count'],
+    }
+    state_52d = await asyncio.to_thread(
+        build_52d_state,
+        jenkins_data,
+        prometheus_data,
+        log_text,
+        state.predictor.encoder,
+    )
+
+    pattern, _ = detect_failure_pattern(log_text)
+
+    if failure_prob > 0.5:
+        if state.failure_detected_time is None and state.prev_build_status != 'FAILURE':
+            state.failure_detected_time = time.time()
+            logging.info('NEW failure detected — MTTR timer started')
+
+        if build_num is not None and build_num == state.last_healed_build:
+            print(f"\n  Status: Build #{build_num} already handled - skipping duplicate healing")
+        elif time.time() - (await asyncio.to_thread(_read_cooldown_ts)) < HEAL_COOLDOWN_S:
+            cooldown_ts = await asyncio.to_thread(_read_cooldown_ts)
+            remaining = int(HEAL_COOLDOWN_S - (time.time() - cooldown_ts))
+            print(f"\n  Status: Cooldown active - {remaining}s remaining before next heal")
+        else:
+            cicd_fix_success = False
+            failure_type_key = 'UNKNOWN'
+            fix_result: Optional[Any] = None
+
+            if build_status in ('FAILURE', 'UNSTABLE', 'ABORTED'):
+                try:
+                    from src.prediction.failure_classifier import classify_failure
+
+                    classification = await asyncio.to_thread(classify_failure, log_text, telemetry_dict)
+                    failure_type_key = classification.failure_type
+                    confidence = classification.confidence
+                    print('\n  CI/CD Failure Analysis:')
+                    print(f"    Type:       {failure_type_key}")
+                    print(f"    Confidence: {confidence:.2f}")
+                    print(f"    Details:    {classification.details}")
+
+                    if failure_type_key in ('DEPENDENCY', 'CONFIG', 'TEST', 'BUILD') and confidence > 0.5:
+                        print('\n  Attempting CI/CD Auto-Fix...')
+                        cicd_fix_success, fix_result = await _execute_cicd_fix_with_retry(
+                            failure_type_key,
+                            log_text,
+                            state.job_name,
+                            build_num,
+                            telemetry_dict,
+                        )
+                        if fix_result is not None:
+                            print(f"    Fix Type:   {fix_result.fix_type}")
+                            print(f"    Success:    {fix_result.success}")
+                            print(f"    Details:    {fix_result.details}")
+                        if cicd_fix_success:
+                            print('    OK CI/CD fix applied successfully')
+                            await asyncio.to_thread(_append_csv, 'data/cicd_fix_log.csv', {
+                                'timestamp': datetime.now(timezone.utc).isoformat(),
+                                'build_number': str(build_num),
+                                'failure_type': failure_type_key,
+                                'fix_type': fix_result.fix_type if fix_result is not None else 'unknown',
+                                'success': 'True',
+                                'duration_ms': f"{(fix_result.duration_ms if fix_result is not None else 0):.0f}",
+                            })
+                        elif _is_circuit_open(failure_type_key):
+                            await escalate_to_human({
+                                'build_number': str(build_num),
+                                'affected_service': _affected_service(),
+                                'failure_prob': f"{failure_prob:.3f}",
+                                'failure_pattern': pattern or 'none',
+                                'jenkins_last_build_status': build_status,
+                            }, f'Circuit breaker OPEN for {failure_type_key}')
+                except Exception as exc:
+                    logging.warning('CI/CD classification/fix failed: %s', exc)
+
+            if cicd_fix_success:
+                print('\n  Skipping infrastructure action (CI/CD fix succeeded)')
+                if build_num is not None:
+                    state.last_healed_build = build_num
+                await asyncio.to_thread(_write_cooldown_ts)
+            else:
+                if state.policy is not None:
+                    action, _ = await asyncio.to_thread(lambda: state.policy.predict(state_52d, deterministic=True))
+                    action_id = int(action)
+                else:
+                    action_id = 0
+
+                ml_action_name = ACTION_NAMES.get(action_id, 'restart_pod')
+                action_name, action_reason = determine_healing_action(telemetry_dict, ml_action_name, failure_prob)
+                action_id = _ACTION_IDS.get(action_name, action_id)
+                decision_explain = explain_decision(telemetry_dict, action_name, failure_prob)
+
+                print('\n  RL Agent Decision:')
+                print(f"    Pattern:    {pattern}")
+                print(f"    Action:     [{action_id}] {action_name}")
+                print(f"    Reason:     {action_reason}")
+                print(f"    Confidence: {decision_explain['confidence']}")
+                for reason_text in decision_explain['reasons']:
+                    print(f"      - {reason_text}")
+
+                context = {
+                    'build_number': str(build_num),
+                    'affected_service': _affected_service(),
+                    'failure_prob': f"{failure_prob:.3f}",
+                    'failure_pattern': pattern or 'none',
+                    'escalation_reason': action_reason,
+                    'prometheus_cpu_usage': f"{prom_metrics['cpu_usage']:.1f}",
+                    'prometheus_memory_usage': f"{prom_metrics['memory_usage']:.1f}",
+                    'jenkins_last_build_status': build_status,
+                }
+                success = await _execute_action_with_retry(action_id, context, action_name)
+
+                if build_num is not None:
+                    state.last_healed_build = build_num
+                await asyncio.to_thread(_write_cooldown_ts)
+
+                state.total_actions += 1
+                if success:
+                    state.successful_actions += 1
+                    print('    Result:   SUCCESS')
+                    await asyncio.to_thread(_write_brain_feed_event, action_name, failure_prob, success, 0)
+                    if state.failure_detected_time is not None:
+                        actual_mttr = time.time() - state.failure_detected_time
+                        if 5.0 <= actual_mttr <= 300.0:
+                            baseline = MTTR_BASELINES.get(action_name, 120.0)
+                            reduction = max(0.0, (baseline - actual_mttr) / baseline * 100)
+                            state.mttr_measurements.append(reduction)
+                            await asyncio.to_thread(_log_mttr, pattern or 'unknown', action_name, actual_mttr)
+                            print(f"    MTTR:     {actual_mttr:.1f}s (baseline {baseline:.0f}s, {reduction:.1f}% reduction)")
+                        else:
+                            logging.warning('MTTR %.1fs outside realistic range [5-300] — skipping', actual_mttr)
+                        state.failure_detected_time = None
+                else:
+                    print('    Result:   FAILED')
+                    await asyncio.to_thread(_write_brain_feed_event, action_name, failure_prob, success, 0)
+
+                csv_row = {
+                    'timestamp': datetime.now(timezone.utc).isoformat(),
+                    'cycle': str(state.cycle_count),
+                    'build_number': str(build_num),
+                    'build_status': build_status,
+                    'failure_prob': f"{failure_prob:.3f}",
+                    'pattern': pattern,
+                    'action_id': str(action_id),
+                    'action_name': action_name,
+                    'success': str(success),
+                    'cpu': f"{prom_metrics['cpu_usage']:.1f}",
+                    'memory': f"{prom_metrics['memory_usage']:.1f}",
+                    'app_health': f"{app_health['health_pct']:.0f}",
+                }
+                await asyncio.to_thread(_append_csv, 'data/healing_log.csv', csv_row)
+                await asyncio.to_thread(_append_ndjson, 'data/healing_log.json', {
+                    'timestamp': csv_row['timestamp'],
+                    'action_id': int(csv_row['action_id']),
+                    'action_name': csv_row['action_name'],
+                    'success': csv_row['success'].lower() == 'true',
+                    'duration_ms': 0,
+                    'detail': f"Orchestrator healing: {csv_row['action_name']}",
+                    'context': {
+                        'build_number': csv_row['build_number'],
+                        'affected_service': _affected_service(),
+                        'failure_prob': csv_row['failure_prob'],
+                        'failure_pattern': csv_row['pattern'],
+                        'cpu_usage': csv_row['cpu'],
+                        'memory_usage': csv_row['memory'],
+                        'app_health': csv_row['app_health'],
+                    },
+                })
+    else:
+        print('\n  Status: System healthy -- no intervention needed')
+        if build_status == 'SUCCESS':
+            state.failure_detected_time = None
+        if app_health.get('health_pct', 0) >= 100:
+            state.last_healed_build = None
+
+    state.prev_build_status = build_status
+    print(f"\n  Stats: {state.total_actions} actions taken, {state.successful_actions} successful")
+    mttr_avg = sum(state.mttr_measurements) / len(state.mttr_measurements) if state.mttr_measurements else 0
+    if state.mttr_measurements:
+        print(f"  Avg MTTR Reduction: {mttr_avg:.1f}% ({len(state.mttr_measurements)} incidents)")
+    if build:
+        state.last_build_number = build.number
+
+
+async def alert_consumer(queue: asyncio.Queue, state: OrchestratorState) -> None:
+    while True:
+        event = await queue.get()
+        try:
+            await _process_cycle(state, event)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logging.exception('Error in orchestrator cycle: %s', exc)
+        finally:
+            queue.task_done()
+
+
+async def main() -> None:
+    _setup_logging()
+    _load_env()
+    _print_banner()
+    await asyncio.to_thread(_touch_alive_file)
+
+    jenkins_url = _env('JENKINS_URL', 'http://localhost:8080')
+    jenkins_user = _env('JENKINS_USERNAME', 'admin')
+    jenkins_pass = _env('JENKINS_PASSWORD', '')
+    jenkins_token = _env('JENKINS_TOKEN', jenkins_pass)
+    job_name = _env('JENKINS_JOB', 'build-pipeline')
+    self_ci_job = _env('SELF_CI_JOB', 'neuroshield-ci')
+    prom_url = _env('PROMETHEUS_URL', 'http://localhost:9090')
+    app_url = _env('DUMMY_APP_URL', 'http://localhost:5000')
+    poll_interval = int(_env('POLL_INTERVAL', '15'))
     namespace = _namespace()
 
     print(f"\n  Config:")
@@ -916,405 +1452,53 @@ def main() -> None:
     print(f"    Namespace:  {namespace}")
     print(f"    Interval:   {poll_interval}s")
 
-    # Load ML models
-    print("\n  Loading models...")
-    predictor = FailurePredictor(model_dir="models")
-    print("    [OK] DistilBERT failure predictor loaded")
+    print('\n  Loading models...')
+    predictor = await asyncio.to_thread(FailurePredictor, model_dir='models')
+    print('    [OK] DistilBERT failure predictor loaded')
 
     try:
-        policy = PPO.load("models/ppo_policy.zip")
-        print("    [OK] PPO RL policy loaded (52D state â†’ 6 actions)")
+        policy = await asyncio.to_thread(PPO.load, 'models/ppo_policy.zip')
+        print('    [OK] PPO RL policy loaded (52D state → 6 actions)')
     except Exception as exc:
         policy = None
-        print(f"    [!!] PPO policy not found -- falling back to default action ({exc})")
+        print(f'    [!!] PPO policy not found -- falling back to default action ({exc})')
 
-    # Tracking
-    cycle_count = 0
-    total_actions = 0
-    successful_actions = 0
-    last_build_number: Optional[int] = None
-    last_healed_build: Optional[int] = None  # dedup: skip if already healed this build
-    last_heal_time: float = 0.0  # cooldown: timestamp of last healing action
-    HEAL_COOLDOWN_S = 60  # seconds to wait between healing actions
-    failure_detected_time: Optional[float] = None  # MTTR: when NEW failure first detected
-    prev_build_status: Optional[str] = None  # track state transitions for MTTR
-    mttr_measurements: list = []  # MTTR: list of reduction percentages for summary
-    telemetry_history: list = []  # rolling window for early warning detection
+    state = OrchestratorState(
+        predictor=predictor,
+        policy=policy,
+        jenkins_url=jenkins_url,
+        jenkins_user=jenkins_user,
+        jenkins_token=jenkins_token,
+        job_name=job_name,
+        self_ci_job=self_ci_job,
+        prom_url=prom_url,
+        app_url=app_url,
+        poll_interval=poll_interval,
+        namespace=namespace,
+    )
 
-    print(f"\n  Entering monitoring loop (Ctrl+C to stop)...")
+    print('\n  Entering async monitoring daemon (Ctrl+C to stop)...')
 
+    event_queue: asyncio.Queue = asyncio.Queue(maxsize=200)
+    tasks = [
+        asyncio.create_task(polling_loop(event_queue, poll_interval), name='polling_loop'),
+        asyncio.create_task(consume_webhook_alerts(event_queue), name='webhook_consumer'),
+        asyncio.create_task(alert_consumer(event_queue, state), name='alert_consumer'),
+    ]
     try:
-        while True:
-            # Update heartbeat file for Docker healthcheck
-            try:
-                with open("/tmp/orchestrator_alive", "w") as f:
-                    f.write(str(time.time()))
-            except Exception:
-                pass
-                
-            cycle_count += 1
-            _print_cycle_header(cycle_count)
-
-            # --- Step 1: Check service health ---
-            jenkins_ok, jenkins_lat = _check_service(f"{jenkins_url}/api/json",
-                                                     timeout=5)
-            prom_ok, prom_lat = _check_service(f"{prom_url}/-/healthy", timeout=5)
-            app_ok, app_lat = _check_service(app_url, timeout=5)
-
-            # Auto-reconnect port-forward if app appears offline
-            if not app_ok:
-                _ensure_port_forward()
-                time.sleep(3)
-                app_ok, app_lat = _check_service(app_url, timeout=5)
-
-            _print_status("Jenkins", jenkins_ok, f"{jenkins_lat:.0f}ms" if jenkins_ok else "")
-            _print_status("Prometheus", prom_ok, f"{prom_lat:.0f}ms" if prom_ok else "")
-            _print_status("Dummy App", app_ok, f"{app_lat:.0f}ms" if app_ok else "")
-
-            # --- Step 2: Collect telemetry ---
-            prom_metrics = _collect_prometheus_metrics(prom_url) if prom_ok else {
-                "cpu_usage": 0.0, "memory_usage": 0.0, "pod_count": 0.0,
-                "error_rate": 0.0, "pod_restarts": 0.0}
-            app_health = _collect_dummy_app_health(app_url) if app_ok else {
-                "health_pct": 0, "response_ms": 0}
-
-            # Get Jenkins build info
-            build = None
-            log_text = ""
-            if jenkins_ok:
-                build = get_latest_build_info(jenkins_url, job_name, jenkins_user, jenkins_token)
-                if build:
-                    log_text = get_build_log(jenkins_url, job_name, build.number, jenkins_user, jenkins_token)
-
-            build_status = build.result if build else "UNKNOWN"
-            build_num = build.number if build else 0
-            build_duration = build.duration_ms if build else 0
-
-            print(f"\n  Telemetry:")
-            print(f"    Build #{build_num}: {build_status} ({build_duration}ms)")
-            print(f"    CPU: {prom_metrics['cpu_usage']:.1f}%  |  Memory: {prom_metrics['memory_usage']:.1f}%")
-            print(f"    Pods: {prom_metrics['pod_count']:.0f}  |  Error Rate: {prom_metrics['error_rate']:.4f}")
-            print(f"    App Health: {app_health['health_pct']:.0f}%  |  Response: {app_health['response_ms']:.0f}ms")
-
-            # Save telemetry row
-            _save_telemetry_row({
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "jenkins_last_build_status": build_status,
-                "jenkins_last_build_duration": str(build_duration),
-                "jenkins_queue_length": "0",
-                "prometheus_cpu_usage": f"{prom_metrics['cpu_usage']:.2f}",
-                "prometheus_memory_usage": f"{prom_metrics['memory_usage']:.2f}",
-                "prometheus_pod_count": f"{prom_metrics['pod_count']:.0f}",
-                "prometheus_error_rate": f"{prom_metrics['error_rate']:.4f}",
-                "app_health_pct": f"{app_health['health_pct']:.0f}",
-                "app_response_ms": f"{app_health['response_ms']:.0f}",
-            })
-
-            # --- Step 2b: Self-CI monitoring ---
-            if self_ci_job:
-                self_ci = _get_self_ci_build(jenkins_url, self_ci_job, jenkins_user, jenkins_token)
-                if self_ci and self_ci.get("result"):
-                    sci_result = self_ci["result"]
-                    sci_num = self_ci.get("number", "?")
-                    if sci_result in ("FAILURE", "UNSTABLE", "ABORTED"):
-                        print(f"\n  Self-CI: Build #{sci_num} → {sci_result}  ⚠ ALERT")
-                        handle_self_ci_failure(self_ci)
-                    else:
-                        print(f"\n  Self-CI: Build #{sci_num} → {sci_result}  ✓")
-                        _update_self_ci_status_ok(self_ci)
-
-            # --- Step 3: Predict failure ---
-            telemetry_dict = {
-                "jenkins_last_build_status": build_status,
-                "jenkins_last_build_duration": build_duration,
-                "jenkins_queue_length": 0,
-                "prometheus_cpu_usage": prom_metrics["cpu_usage"],
-                "prometheus_memory_usage": prom_metrics["memory_usage"],
-                "prometheus_pod_count": prom_metrics["pod_count"],
-                "prometheus_error_rate": prom_metrics["error_rate"],
-                "pod_restart_count": prom_metrics.get("pod_restarts", 0.0),
-            }
-
-            if not log_text:
-                log_text = f"Build {build_num} status {build_status}"
-
-            failure_prob = predictor.predict(log_text, telemetry_dict)
-            # Guard against NaN from predictor
-            if failure_prob != failure_prob:  # NaN check
-                failure_prob = 0.5 if _is_failure(build_status) else 0.0
-
-            # --- App health-aware override ---
-            # If dummy-app /health is degraded (503), boost failure_prob so
-            # NeuroShield acts within its 15-30s window, before K8s liveness
-            # probe triggers autonomously at ~90s.
-            _app_hp = app_health.get("health_pct", 100)
-            if _app_hp < 100:
-                _boosted = max(failure_prob, 0.78)
-                if _boosted > failure_prob:
-                    logging.info(
-                        "[HEALTH] App degraded (health_pct=%.0f%%) -- "
-                        "boosting failure_prob %.3f -> %.3f",
-                        _app_hp, failure_prob, _boosted,
-                    )
-                    failure_prob = _boosted
-            telemetry_dict["app_health_pct"] = _app_hp
-            prob_bar = "â–ˆ" * int(failure_prob * 20) + "â–‘" * (20 - int(failure_prob * 20))
-            prob_label = "LOW" if failure_prob < 0.3 else "MEDIUM" if failure_prob < 0.6 else "HIGH" if failure_prob < 0.8 else "CRITICAL"
-            print(f"\n  Prediction:")
-            print(f"    Failure Prob: [{prob_bar}] {failure_prob:.3f} ({prob_label})")
-
-            # --- Early warning detection (flags trends before threshold is crossed) ---
-            telemetry_history.append(telemetry_dict)
-            if len(telemetry_history) > 20:
-                telemetry_history = telemetry_history[-20:]
-            warn_action, warn_conf = detect_early_warning(telemetry_history)
-            if warn_action and failure_prob < 0.5:
-                print(f"    Early Warning: Trending toward {warn_action} (conf={warn_conf:.0%})")
-
-            # --- Step 4: RL Agent decision ---
-            jenkins_data = {
-                "build_duration": build_duration,
-                "build_number": build_num,
-                "retry_count": 0,
-            }
-            prometheus_data = {
-                "cpu_avg_5m": prom_metrics["cpu_usage"],
-                "memory_avg_5m": prom_metrics["memory_usage"],
-                "pod_restarts": 0,
-                "node_count": prom_metrics["pod_count"],
-            }
-            state_52d = build_52d_state(jenkins_data, prometheus_data, log_text, predictor.encoder)
-
-            pattern, pattern_action = detect_failure_pattern(log_text)
-
-            if failure_prob > 0.5:
-                # Record failure detection time for MTTR — only on NEW failure transition
-                if failure_detected_time is None and prev_build_status != "FAILURE":
-                    failure_detected_time = time.time()
-                    logging.info("NEW failure detected — MTTR timer started")
-
-                # Dedup: skip if we already healed this exact build
-                if build_num is not None and build_num == last_healed_build:
-                    print(f"\n  Status: Build #{build_num} already handled \u2014 skipping duplicate healing")
-                elif time.time() - _read_cooldown_ts() < HEAL_COOLDOWN_S:
-                    remaining = int(HEAL_COOLDOWN_S - (time.time() - _read_cooldown_ts()))
-                    print(f"\n  Status: Cooldown active \u2014 {remaining}s remaining before next heal")
-                else:
-                    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-                    # NEW: CI/CD Failure Classification & Auto-Fix
-                    # Priority: Try CI/CD fixes BEFORE infrastructure actions
-                    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-                    cicd_fix_attempted = False
-                    cicd_fix_success = False
-
-                    # Only attempt CI/CD fixes for build failures
-                    if build_status in ("FAILURE", "UNSTABLE", "ABORTED"):
-                        try:
-                            from src.prediction.failure_classifier import classify_failure
-                            from src.orchestrator.cicd_fixer import fix_cicd_failure
-
-                            # Step 1: Classify the failure type
-                            classification = classify_failure(log_text, telemetry_dict)
-                            failure_type = classification.failure_type
-                            confidence = classification.confidence
-
-                            print(f"\n  CI/CD Failure Analysis:")
-                            print(f"    Type:       {failure_type}")
-                            print(f"    Confidence: {confidence:.2f}")
-                            print(f"    Details:    {classification.details}")
-
-                            # Step 2: Attempt automated fix for actionable types
-                            # (DEPENDENCY, CONFIG, TEST, BUILD - not INFRASTRUCTURE)
-                            if failure_type in ("DEPENDENCY", "CONFIG", "TEST", "BUILD") and confidence > 0.5:
-                                print(f"\n  Attempting CI/CD Auto-Fix...")
-                                cicd_fix_attempted = True
-
-                                fix_result = fix_cicd_failure(
-                                    failure_type=failure_type,
-                                    log_text=log_text,
-                                    job_name=job_name,
-                                    build_number=build_num,
-                                    telemetry=telemetry_dict,
-                                    dry_run=False,  # Real execution
-                                )
-
-                                print(f"    Fix Type:   {fix_result.fix_type}")
-                                print(f"    Success:    {fix_result.success}")
-                                print(f"    Details:    {fix_result.details}")
-                                _publish_fix_telemetry_event(
-                                    action=fix_result.fix_type,
-                                    target=job_name,
-                                    success=fix_result.success,
-                                )
-
-                                if fix_result.success:
-                                    cicd_fix_success = True
-                                    print(f"    ✓ CI/CD fix applied successfully")
-                                    print(f"    → Recommendation: Retry build to verify fix")
-
-                                    # Log the fix for audit
-                                    _append_csv("data/cicd_fix_log.csv", {
-                                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                                        "build_number": str(build_num),
-                                        "failure_type": failure_type,
-                                        "fix_type": fix_result.fix_type,
-                                        "success": str(fix_result.success),
-                                        "duration_ms": f"{fix_result.duration_ms:.0f}",
-                                    })
-
-                        except Exception as e:
-                            logging.warning(f"CI/CD classification/fix failed: {e}")
-                            # Continue to infrastructure actions as fallback
-
-                    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-                    # EXISTING: Infrastructure Action Logic (Fallback)
-                    # Only execute if CI/CD fix didn't succeed
-                    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-                    # Skip infrastructure action if CI/CD fix succeeded
-                    if cicd_fix_success:
-                        print(f"\n  Skipping infrastructure action (CI/CD fix succeeded)")
-                        # Mark build as handled but don't execute infra action
-                        if build_num is not None:
-                            last_healed_build = build_num
-                        last_heal_time = time.time()
-                        _write_cooldown_ts()
-                        continue  # Skip to next cycle
-
-                    # Use PPO to choose action initially
-                    if policy is not None:
-                        action, _ = policy.predict(state_52d, deterministic=True)
-                        action_id = int(action)
-                    else:
-                        action_id = 0  # default to restart_pod
-
-                    # Apply rule-based + ML hybrid selection
-                    # (ensures all 6 actions trigger in realistic conditions)
-                    ml_action_name = ACTION_NAMES.get(action_id, "restart_pod")
-                    action_name, action_reason = determine_healing_action(
-                        telemetry_dict, ml_action_name, failure_prob
-                    )
-                    action_id = _ACTION_IDS.get(action_name, action_id)
-
-                    # Explainable AI: why did we choose this action?
-                    decision_explain = explain_decision(telemetry_dict, action_name, failure_prob)
-
-                    print(f"\n  RL Agent Decision:")
-                    print(f"    Pattern:    {pattern}")
-                    print(f"    Action:     [{action_id}] {action_name}")
-                    print(f"    Reason:     {action_reason}")
-                    print(f"    Confidence: {decision_explain['confidence']}")
-                    for r_str in decision_explain["reasons"]:
-                        print(f"      - {r_str}")
-
-                    # Execute healing action
-                    success = execute_healing_action(action_id, {
-                        "build_number": str(build_num),
-                        "affected_service": _affected_service(),
-                        "failure_prob": f"{failure_prob:.3f}",
-                        "failure_pattern": pattern or "none",
-                        "escalation_reason": action_reason,
-                        "prometheus_cpu_usage": f"{prom_metrics['cpu_usage']:.1f}",
-                        "prometheus_memory_usage": f"{prom_metrics['memory_usage']:.1f}",
-                        "jenkins_last_build_status": build_status,
-                    })
-
-                    # Mark as handled after execution
-                    if build_num is not None:
-                        last_healed_build = build_num
-                    last_heal_time = time.time()
-                    _write_cooldown_ts()
-
-                    total_actions += 1
-
-                    if success:
-                        successful_actions += 1
-                        print(f"    Result:   SUCCESS")
-
-                        # Write brain feed event for live SSE stream
-                        _write_brain_feed_event(action_name, failure_prob, success, 0)
-
-                        # MTTR measurement — only log realistic values (5-300s)
-                        if failure_detected_time is not None:
-                            actual_mttr = time.time() - failure_detected_time
-                            if 5.0 <= actual_mttr <= 300.0:
-                                baseline = MTTR_BASELINES.get(action_name, 120.0)
-                                reduction = max(0.0, (baseline - actual_mttr) / baseline * 100)
-                                mttr_measurements.append(reduction)
-                                _log_mttr(pattern or "unknown", action_name, actual_mttr)
-                                print(f"    MTTR:     {actual_mttr:.1f}s (baseline {baseline:.0f}s, {reduction:.1f}% reduction)")
-                            else:
-                                logging.warning("MTTR %.1fs outside realistic range [5-300] — skipping", actual_mttr)
-                            failure_detected_time = None
-                    else:
-                        print(f"    Result:   FAILED")
-                        # Write brain feed event for failed healing
-                        _write_brain_feed_event(action_name, failure_prob, success, 0)
-
-                    # Log healing decision
-                    csv_row = {
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                        "cycle": str(cycle_count),
-                        "build_number": str(build_num),
-                        "build_status": build_status,
-                        "failure_prob": f"{failure_prob:.3f}",
-                        "pattern": pattern,
-                        "action_id": str(action_id),
-                        "action_name": action_name,
-                        "success": str(success),
-                        "cpu": f"{prom_metrics['cpu_usage']:.1f}",
-                        "memory": f"{prom_metrics['memory_usage']:.1f}",
-                        "app_health": f"{app_health['health_pct']:.0f}",
-                    }
-                    _append_csv("data/healing_log.csv", csv_row)
-                    # Also write to JSON for dashboard
-                    _append_ndjson("data/healing_log.json", {
-                        "timestamp": csv_row["timestamp"],
-                        "action_id": int(csv_row["action_id"]),
-                        "action_name": csv_row["action_name"],
-                        "success": csv_row["success"].lower() == "true",
-                        "duration_ms": 0,
-                        "detail": f"Orchestrator healing: {csv_row['action_name']}",
-                        "context": {
-                            "build_number": csv_row["build_number"],
-                            "affected_service": _affected_service(),
-                            "failure_prob": csv_row["failure_prob"],
-                            "failure_pattern": csv_row["pattern"],
-                            "cpu_usage": csv_row["cpu"],
-                            "memory_usage": csv_row["memory"],
-                            "app_health": csv_row["app_health"],
-                        }
-                    })
-            else:
-                print(f"\n  Status: System healthy -- no intervention needed")
-                if build_status == "SUCCESS":
-                    failure_detected_time = None  # reset MTTR timer on healthy build
-                # Reset dedup when app is healthy again, so next crash can be healed
-                if app_health.get("health_pct", 0) >= 100:
-                    last_healed_build = None
-
-            prev_build_status = build_status
-
-            # --- Summary ---
-            print(f"\n  Stats: {total_actions} actions taken, {successful_actions} successful")
-            mttr_avg = sum(mttr_measurements) / len(mttr_measurements) if mttr_measurements else 0
-            if mttr_measurements:
-                print(f"  Avg MTTR Reduction: {mttr_avg:.1f}% ({len(mttr_measurements)} incidents)")
-            if build:
-                last_build_number = build.number
-
-            print(f"\n  Next cycle in {poll_interval}s...")
-            time.sleep(poll_interval)
-
+        await asyncio.gather(*tasks)
+    except asyncio.CancelledError:
+        raise
     except KeyboardInterrupt:
+        pass
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
         print(f"\n\n{'=' * 55}")
-        print(f"  Orchestrator stopped by user")
-        print(f"  Total cycles: {cycle_count} | Actions: {total_actions} | Success: {successful_actions}")
+        print('  Orchestrator stopped')
+        print(f"  Total cycles: {state.cycle_count} | Actions: {state.total_actions} | Success: {state.successful_actions}")
         print(f"{'=' * 55}\n")
-    except Exception as exc:
-        logging.exception("Error in orchestrator: %s", exc)
-
-
 # ---------------------------------------------------------------------------
 # Simulate mode â€“ one-shot simulated decision (no Jenkins / K8s needed)
 # ---------------------------------------------------------------------------
@@ -1511,4 +1695,5 @@ if __name__ == "__main__":
     if cli_args.mode == "simulate":
         run_once()
     else:
-        main()
+        asyncio.run(main())
+
