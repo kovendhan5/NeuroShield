@@ -1,57 +1,135 @@
-﻿import { Activity, BarChart3, CheckCircle, Clock3, Server, ShieldAlert, WifiOff } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { Activity, BarChart3, CheckCircle, Clock3, Server, ShieldAlert } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
-interface Stats { active_heals: number; success_rate: number; avg_response_time: number; cost_saved: number; }
-interface Action { action_name: string; duration_ms: number; success: boolean; }
-interface Metric { time: string; success_rate: number; incidents: number; }
+interface RecentFix {
+  type: 'fix';
+  action: string;
+  target: string;
+  success: boolean;
+  timestamp: string;
+}
+
+interface TelemetryMessage {
+  cpu: number;
+  memory: number;
+  health_score: number;
+  active_alerts: number;
+  recent_fix: RecentFix | null;
+  timestamp: string;
+}
+
+interface MetricPoint {
+  time: string;
+  health_score: number;
+  cpu: number;
+  memory: number;
+}
+
+const WS_URL = 'ws://localhost/ws/telemetry';
+const INITIAL_BACKOFF_MS = 3000;
+const MAX_BACKOFF_MS = 30000;
 
 export default function App() {
-  const [stats, setStats] = useState<Stats>({ active_heals: 0, success_rate: 0, avg_response_time: 0, cost_saved: 0 });
-  const [actions, setActions] = useState<Action[]>([]);
-  const [metrics, setMetrics] = useState<Metric[]>([]);
-  const [connected, setConnected] = useState(true);
+  const [telemetry, setTelemetry] = useState<TelemetryMessage>({
+    cpu: 0,
+    memory: 0,
+    health_score: 100,
+    active_alerts: 0,
+    recent_fix: null,
+    timestamp: new Date().toISOString(),
+  });
+  const [metrics, setMetrics] = useState<MetricPoint[]>([]);
+  const [connected, setConnected] = useState(false);
+
+  const websocketRef = useRef<WebSocket | null>(null);
+  const reconnectTimerRef = useRef<number | null>(null);
+  const backoffRef = useRef<number>(INITIAL_BACKOFF_MS);
+  const closedByUnmountRef = useRef<boolean>(false);
 
   useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const statsRes = await fetch('/api/dashboard/stats');
-        if (statsRes.ok) {
-          const s = await statsRes.json();
-          setStats({
-            active_heals: s.total_heals || 0,
-            success_rate: s.success_rate || 0,
-            avg_response_time: Math.round(s.avg_response_time || 0),
-            cost_saved: s.cost_saved || 0
-          });
-        }
+    closedByUnmountRef.current = false;
 
-        const histRes = await fetch('/api/dashboard/history?limit=10');
-        if (histRes.ok) {
-          const h = await histRes.json();
-          setActions(h.actions || []);
-        }
-
-        const metRes = await fetch('/api/dashboard/metrics');
-        if (metRes.ok) {
-          const m = await metRes.json();
-          setMetrics(m.metrics || []);
-        }
-        setConnected(true);
-      } catch (e) {
-        setConnected(false);
+    const clearReconnectTimer = () => {
+      if (reconnectTimerRef.current !== null) {
+        window.clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
       }
     };
 
-    fetchData();
-    const interval = setInterval(fetchData, 3000);
-    return () => clearInterval(interval);
+    const scheduleReconnect = () => {
+      clearReconnectTimer();
+      const delay = backoffRef.current;
+      reconnectTimerRef.current = window.setTimeout(() => {
+        connectSocket();
+      }, delay);
+      backoffRef.current = Math.min(backoffRef.current * 2, MAX_BACKOFF_MS);
+    };
+
+    const connectSocket = () => {
+      if (closedByUnmountRef.current) {
+        return;
+      }
+
+      try {
+        const ws = new WebSocket(WS_URL);
+        websocketRef.current = ws;
+
+        ws.onopen = () => {
+          setConnected(true);
+          backoffRef.current = INITIAL_BACKOFF_MS;
+          clearReconnectTimer();
+        };
+
+        ws.onmessage = (event: MessageEvent<string>) => {
+          try {
+            const payload = JSON.parse(event.data) as TelemetryMessage;
+            setTelemetry(payload);
+            setMetrics((prev) => {
+              const point: MetricPoint = {
+                time: new Date(payload.timestamp).toLocaleTimeString(),
+                health_score: payload.health_score,
+                cpu: payload.cpu,
+                memory: payload.memory,
+              };
+              const next = [...prev, point];
+              return next.slice(-30);
+            });
+          } catch {
+            // Ignore malformed payloads and keep current state.
+          }
+        };
+
+        ws.onclose = () => {
+          setConnected(false);
+          if (!closedByUnmountRef.current) {
+            scheduleReconnect();
+          }
+        };
+
+        ws.onerror = () => {
+          setConnected(false);
+        };
+      } catch {
+        setConnected(false);
+        scheduleReconnect();
+      }
+    };
+
+    connectSocket();
+
+    return () => {
+      closedByUnmountRef.current = true;
+      clearReconnectTimer();
+      if (websocketRef.current !== null) {
+        websocketRef.current.close();
+      }
+    };
   }, []);
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 p-8">
       <div className="max-w-7xl mx-auto space-y-6">
-        
         <header className="flex justify-between items-center bg-white p-6 rounded-xl shadow-sm border border-slate-200">
           <div>
             <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
@@ -61,23 +139,32 @@ export default function App() {
             <p className="text-slate-500 text-sm mt-1">Live AI Orchestration & Platform Intelligence</p>
           </div>
           <div className="flex items-center gap-4">
-            {!connected && (
-              <span className="flex items-center gap-1 text-red-500 bg-red-50 px-3 py-1 rounded-full text-sm font-medium border border-red-100">
-                <WifiOff size={16} /> Disconnected
+            {connected ? (
+              <span className="flex items-center gap-2 text-emerald-700 bg-emerald-50 px-4 py-2 rounded-lg text-sm font-bold border border-emerald-200">
+                <span className="relative flex h-3 w-3">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-500 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+                </span>
+                LIVE
+              </span>
+            ) : (
+              <span className="flex items-center gap-2 text-red-700 bg-red-50 px-4 py-2 rounded-lg text-sm font-bold border border-red-200">
+                <span className="inline-flex rounded-full h-3 w-3 bg-red-500"></span>
+                RECONNECTING...
               </span>
             )}
             <span className="flex items-center gap-2 text-blue-700 bg-blue-50 px-4 py-2 rounded-lg text-sm font-medium border border-blue-100">
-              <Server size={18} /> API Connected
+              <Server size={18} /> WebSocket Feed
             </span>
           </div>
         </header>
 
         <section className="grid grid-cols-1 md:grid-cols-4 gap-6">
           {[
-            { label: 'Active Resolutions', value: stats.active_heals, icon: <Activity size={24}/>, hint: 'Events today' },
-            { label: 'Platform Reliability', value: parseFloat(stats.success_rate.toString()).toFixed(1) + '%', icon: <CheckCircle size={24}/>, hint: 'Success rate' },
-            { label: 'MTTR Target', value: stats.avg_response_time + 'ms', icon: <Clock3 size={24}/>, hint: 'Mean time to resolve' },
-            { label: 'Value Protected', value: '$' + Math.round(stats.cost_saved), icon: <BarChart3 size={24}/>, hint: 'Cost avoided' }
+            { label: 'CPU', value: `${telemetry.cpu.toFixed(1)}%`, icon: <Activity size={24} />, hint: 'Current utilization' },
+            { label: 'Memory', value: `${telemetry.memory.toFixed(1)}%`, icon: <BarChart3 size={24} />, hint: 'Current utilization' },
+            { label: 'Health Score', value: `${telemetry.health_score.toFixed(1)}%`, icon: <CheckCircle size={24} />, hint: 'Computed reliability' },
+            { label: 'Active Alerts', value: telemetry.active_alerts, icon: <Clock3 size={24} />, hint: 'Open incidents' },
           ].map((card, i) => (
             <div key={i} className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 flex flex-col justify-between h-36 border-t-4 border-t-blue-500">
               <div className="flex justify-between items-start text-slate-500">
@@ -102,17 +189,16 @@ export default function App() {
                   <XAxis dataKey="time" stroke="#94a3b8" fontSize={12} tickLine={false} axisLine={false} />
                   <YAxis stroke="#94a3b8" fontSize={12} tickLine={false} axisLine={false} />
                   <Tooltip contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }} />
-                  <Area type="monotone" dataKey="success_rate" stroke="#2563eb" fill="#eff6ff" strokeWidth={3} />
+                  <Area type="monotone" dataKey="health_score" stroke="#2563eb" fill="#eff6ff" strokeWidth={3} />
                 </AreaChart>
               </ResponsiveContainer>
             ) : (
-               <div className="flex items-center justify-center h-full text-slate-400 font-medium bg-slate-50 rounded-lg border border-dashed border-slate-300">
-                 Awaiting telemetry payload...
-               </div>
+              <div className="flex items-center justify-center h-full text-slate-400 font-medium bg-slate-50 rounded-lg border border-dashed border-slate-300">
+                Awaiting websocket telemetry...
+              </div>
             )}
           </div>
         </section>
-
       </div>
     </div>
   );

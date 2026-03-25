@@ -29,6 +29,49 @@ from src.utils.intelligence import detect_early_warning, explain_decision
 from src.config import validate_k8s_name, validate_positive_int
 
 T = TypeVar("T")
+_RECENT_FIX_REDIS_KEY = "neuroshield:telemetry:recent_fix"
+_telemetry_redis_client = None
+
+
+def _get_telemetry_redis_client():
+    global _telemetry_redis_client
+    if _telemetry_redis_client is not None:
+        return _telemetry_redis_client
+
+    redis_url = os.getenv("REDIS_URL", "").strip()
+    if not redis_url:
+        return None
+
+    try:
+        import redis  # type: ignore
+
+        _telemetry_redis_client = redis.from_url(redis_url, decode_responses=True)
+        _telemetry_redis_client.ping()
+        return _telemetry_redis_client
+    except Exception as exc:
+        logging.warning("Telemetry queue redis unavailable: %s", exc)
+        _telemetry_redis_client = None
+        return None
+
+
+def _publish_fix_telemetry_event(action: str, target: str, success: bool, timestamp: Optional[str] = None) -> None:
+    event = {
+        "type": "fix",
+        "action": action,
+        "target": target,
+        "success": bool(success),
+        "timestamp": timestamp or datetime.now(timezone.utc).isoformat(),
+    }
+
+    client = _get_telemetry_redis_client()
+    if client is None:
+        return
+
+    try:
+        client.rpush(_RECENT_FIX_REDIS_KEY, json.dumps(event))
+        client.ltrim(_RECENT_FIX_REDIS_KEY, -100, -1)
+    except Exception as exc:
+        logging.warning("Failed publishing telemetry fix event: %s", exc)
 
 
 def retry_call(fn: Callable[[], T], max_attempts: int = 3, delay: int = 2) -> T:
@@ -505,6 +548,11 @@ def execute_healing_action(action_id: int, context: Dict[str, str]) -> bool:
     duration_ms = time.time() * 1000.0 - start_ms
     _log_action_history(action_id, success, duration_ms)
     _log_healing_json(action_id, success, duration_ms, detail, context)
+    _publish_fix_telemetry_event(
+        action=ACTION_NAMES.get(action_id, "unknown"),
+        target=context.get("affected_service", _affected_service()),
+        success=success,
+    )
 
     if not success:
         logging.warning("[ACTION] %s FAILED (%s) -- will retry once", ACTION_NAMES.get(action_id, "?"), detail)
@@ -1093,6 +1141,11 @@ def main() -> None:
                                 print(f"    Fix Type:   {fix_result.fix_type}")
                                 print(f"    Success:    {fix_result.success}")
                                 print(f"    Details:    {fix_result.details}")
+                                _publish_fix_telemetry_event(
+                                    action=fix_result.fix_type,
+                                    target=job_name,
+                                    success=fix_result.success,
+                                )
 
                                 if fix_result.success:
                                     cicd_fix_success = True

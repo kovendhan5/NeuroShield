@@ -129,3 +129,44 @@ class DemoTriggerResponse(BaseModel):
     detail: str = ""
     build_url: Optional[str] = None
     memory_before_mb: Optional[float] = None
+
+
+# ── Alertmanager Webhook ───────────────────────────────────────────────────────
+
+class AlertManagerLabelSet(BaseModel):
+    alertname: Optional[str] = None
+    severity: Optional[str] = None
+    instance: Optional[str] = None
+    job: Optional[str] = None
+    service: Optional[str] = None
+    namespace: Optional[str] = None
+    pod: Optional[str] = None
+
+
+class AlertManagerAnnotations(BaseModel):
+    summary: Optional[str] = None
+    description: Optional[str] = None
+    runbook_url: Optional[str] = None
+
+
+class AlertManagerAlert(BaseModel):
+    status: str
+    labels: AlertManagerLabelSet
+    annotations: Optional[AlertManagerAnnotations] = None
+    startsAt: str
+    endsAt: Optional[str] = None
+    generatorURL: Optional[str] = None
+    fingerprint: Optional[str] = None
+
+
+class AlertManagerWebhookPayload(BaseModel):
+    receiver: str
+    status: str
+    alerts: List[AlertManagerAlert] = Field(default_factory=list)
+    groupLabels: Dict[str, str] = Field(default_factory=dict)
+    commonLabels: Dict[str, str] = Field(default_factory=dict)
+    commonAnnotations: Dict[str, str] = Field(default_factory=dict)
+    externalURL: Optional[str] = None
+    version: Optional[str] = None
+    groupKey: Optional[str] = None
+    truncatedAlerts: Optional[int] = None

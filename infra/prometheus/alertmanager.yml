@@ -18,10 +18,19 @@ route:
 
 receivers:
   - name: 'default'
+    webhook_configs:
+      - url: 'http://neuroshield-api:8000/alerts'
+        send_resolved: true
 
   - name: 'critical'
+    webhook_configs:
+      - url: 'http://neuroshield-api:8000/alerts'
+        send_resolved: true
 
   - name: 'warning'
+    webhook_configs:
+      - url: 'http://neuroshield-api:8000/alerts'
+        send_resolved: true
 
 inhibit_rules:
   - source_match:
