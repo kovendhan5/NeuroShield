@@ -1,6 +1,6 @@
-﻿import React, { useEffect, useState } from 'react';
-import { ShieldAlert, Server, Activity, CheckCircle, Clock3, BarChart3, WifiOff } from 'lucide-react';
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Legend } from 'recharts';
+﻿import { Activity, BarChart3, CheckCircle, Clock3, Server, ShieldAlert, WifiOff } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
 interface Stats { active_heals: number; success_rate: number; avg_response_time: number; cost_saved: number; }
 interface Action { action_name: string; duration_ms: number; success: boolean; }

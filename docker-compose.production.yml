@@ -2,7 +2,7 @@
 # Complete standalone DevOps platform with all services
 # Start with: docker-compose up -d
 
-version: '3.8'
+version: "3.8"
 
 services:
   #═══════════════════════════════════════════════════════════════════════════
@@ -26,10 +26,14 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '1.0'
+          cpus: "1.0"
           memory: 1G
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_ADMIN_USER:-postgres} -d neuroshield_db"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${DB_ADMIN_USER:-postgres} -d neuroshield_db",
+        ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -54,7 +58,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.5'
+          cpus: "0.5"
           memory: 512M
     healthcheck:
       test: ["CMD", "redis-cli", "--pass", "${REDIS_PASSWORD}", "ping"]
@@ -83,19 +87,23 @@ services:
       - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
     command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--storage.tsdb.retention.time=15d'
-      - '--web.enable-lifecycle'
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+      - "--web.enable-lifecycle"
     networks:
       - neuroshield-net
     deploy:
       resources:
         limits:
-          cpus: '1.0'
+          cpus: "1.0"
           memory: 1G
     healthcheck:
-      test: ["CMD-SHELL", "wget --spider -q http://localhost:9090/-/healthy || exit 1"]
+      test:
+        [
+          "CMD-SHELL",
+          "wget --spider -q http://localhost:9090/-/healthy || exit 1",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -125,13 +133,17 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.5'
+          cpus: "0.5"
           memory: 512M
     depends_on:
       prometheus:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget --spider -q http://localhost:3000/api/health || exit 1"]
+      test:
+        [
+          "CMD-SHELL",
+          "wget --spider -q http://localhost:3000/api/health || exit 1",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -164,10 +176,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '1.0'
+          cpus: "1.0"
           memory: 1G
     healthcheck:
-      test: ["CMD-SHELL", "wget --spider -q http://localhost:8080/login || exit 1"]
+      test:
+        ["CMD-SHELL", "wget --spider -q http://localhost:8080/login || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -227,7 +240,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.5'
+          cpus: "0.5"
           memory: 512M
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -296,7 +309,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '1.0'
+          cpus: "1.0"
           memory: 1G
     restart: unless-stopped
     logging:
@@ -341,7 +354,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.5'
+          cpus: "0.5"
           memory: 512M
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
