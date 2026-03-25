@@ -1,0 +1,380 @@
+# NeuroShield Production Deployment
+# Complete standalone DevOps platform with all services
+# Start with: docker-compose up -d
+
+version: '3.8'
+
+services:
+  #═══════════════════════════════════════════════════════════════════════════
+  # INFRASTRUCTURE LAYER - Data Storage & Caching
+  #═══════════════════════════════════════════════════════════════════════════
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: neuroshield-postgres
+    environment:
+      POSTGRES_USER: ${DB_ADMIN_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_ADMIN_PASSWORD:?Database admin password required}
+      POSTGRES_DB: neuroshield_db
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - neuroshield-net
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_ADMIN_USER:-postgres} -d neuroshield_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  redis:
+    image: redis:7-alpine
+    container_name: neuroshield-redis
+    command: redis-server --requirepass ${REDIS_PASSWORD:?Redis password required} --maxmemory 512mb --maxmemory-policy allkeys-lru
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - neuroshield-net
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "redis-cli", "--pass", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  #═══════════════════════════════════════════════════════════════════════════
+  # MONITORING STACK - Metrics & Observability
+  #═══════════════════════════════════════════════════════════════════════════
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: neuroshield-prometheus
+    user: "65534"
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=15d'
+      - '--web.enable-lifecycle'
+    networks:
+      - neuroshield-net
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:9090/-/healthy || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: neuroshield-grafana
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:?Grafana password required}
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_SECRET_KEY: ${GRAFANA_SECRET_KEY:?Grafana secret key required}
+      GF_PATHS_PROVISIONING: /etc/grafana/provisioning
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+    networks:
+      - neuroshield-net
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  #═══════════════════════════════════════════════════════════════════════════
+  # CI/CD LAYER - Jenkins
+  #═══════════════════════════════════════════════════════════════════════════
+
+  jenkins:
+    image: jenkins/jenkins:lts-alpine
+    container_name: neuroshield-jenkins
+    user: "1000:1000"
+    ports:
+      - "127.0.0.1:8080:8080"
+      - "50000:50000"
+    environment:
+      JENKINS_OPTS: "--httpPort=8080"
+      JAVA_OPTS: "-Xmx512m -Xms256m"
+    volumes:
+      - jenkins_data:/var/jenkins_home
+    networks:
+      - neuroshield-net
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:8080/login || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "10"
+
+  #═══════════════════════════════════════════════════════════════════════════
+  # NEUROSHIELD CORE SERVICES
+  #═══════════════════════════════════════════════════════════════════════════
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+      args:
+        BUILDKIT_INLINE_CACHE: 1
+    image: neuroshield-api:${VERSION:-latest}
+    container_name: neuroshield-api
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      # Service config
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      API_WORKERS: ${API_WORKERS:-1}
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+
+      # Database
+      DATABASE_URL: postgresql://${DB_APP_USER:-neuroshield_app}:${DB_USER_PASSWORD:?App database password required}@postgres:5432/neuroshield_db
+
+      # Cache
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+
+      # External systems
+      JENKINS_URL: ${JENKINS_URL:-http://jenkins:8080}
+      PROMETHEUS_URL: ${PROMETHEUS_URL:-http://prometheus:9090}
+
+      # Security
+      API_SECRET_KEY: ${API_SECRET_KEY:?API secret key required}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:8501,http://localhost:3000}
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    networks:
+      - neuroshield-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+      args:
+        BUILDKIT_INLINE_CACHE: 1
+    image: neuroshield-worker:${VERSION:-latest}
+    container_name: neuroshield-worker
+    environment:
+      # Service config
+      ORCHESTRATOR_CHECK_INTERVAL: ${ORCHESTRATOR_CHECK_INTERVAL:-10}
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+
+      # Database
+      DATABASE_URL: postgresql://${DB_APP_USER:-neuroshield_app}:${DB_USER_PASSWORD}@postgres:5432/neuroshield_db
+
+      # Cache
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/1
+
+      # External systems - Jenkins
+      JENKINS_URL: ${JENKINS_URL:-http://jenkins:8080}
+      JENKINS_USERNAME: ${JENKINS_USERNAME:-admin}
+      JENKINS_PASSWORD: ${JENKINS_PASSWORD}
+      JENKINS_JOB: ${JENKINS_JOB:-build-pipeline}
+
+      # External systems - Prometheus
+      PROMETHEUS_URL: ${PROMETHEUS_URL:-http://prometheus:9090}
+
+      # External systems - Kubernetes
+      K8S_NAMESPACE: ${K8S_NAMESPACE:-default}
+      AFFECTED_SERVICE: ${AFFECTED_SERVICE:-dummy-app}
+      SCALE_REPLICAS: ${SCALE_REPLICAS:-3}
+
+      # ML/Prediction
+      MODEL_PATH: /app/models/
+      PREDICTION_THRESHOLD: ${PREDICTION_THRESHOLD:-0.7}
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./models:/app/models
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - neuroshield-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard-streamlit
+      args:
+        BUILDKIT_INLINE_CACHE: 1
+    image: neuroshield-dashboard:${VERSION:-latest}
+    container_name: neuroshield-dashboard
+    ports:
+      - "127.0.0.1:8501:8501"
+    environment:
+      # Service config
+      STREAMLIT_SERVER_PORT: 8501
+      STREAMLIT_SERVER_ADDRESS: 0.0.0.0
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+
+      # API endpoint
+      API_URL: http://api:8000
+
+      # Database (for direct queries)
+      DATABASE_URL: postgresql://${DB_APP_USER:-neuroshield_app}:${DB_USER_PASSWORD}@postgres:5432/neuroshield_db
+    volumes:
+      - ./data:/app/data:ro
+      - ./logs:/app/logs:ro
+    networks:
+      - neuroshield-net
+    depends_on:
+      api:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+#═══════════════════════════════════════════════════════════════════════════
+# NETWORK & VOLUMES
+#═══════════════════════════════════════════════════════════════════════════
+
+networks:
+  neuroshield-net:
+    driver: bridge
+    name: neuroshield-net
+    ipam:
+      config:
+        - subnet: 172.22.0.0/16
+
+volumes:
+  postgres_data:
+    name: neuroshield-postgres-data
+  redis_data:
+    name: neuroshield-redis-data
+  jenkins_data:
+    name: neuroshield-jenkins-data
+  prometheus_data:
+    name: neuroshield-prometheus-data
+  grafana_data:
+    name: neuroshield-grafana-data
