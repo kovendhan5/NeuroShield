@@ -18,13 +18,7 @@ scrape_configs:
     static_configs:
       - targets: ['localhost:9090']
 
-  # Node Exporter (System Metrics)
-  - job_name: 'node-exporter'
-    static_configs:
-      - targets: ['neuroshield-node-exporter:9100']
-    scrape_interval: 10s
-
-  # NeuroShield API
+  # NeuroShield API (with built-in metrics)
   - job_name: 'neuroshield-api'
     metrics_path: /prometheus_metrics
     scheme: http
@@ -32,7 +26,7 @@ scrape_configs:
       - targets: ['neuroshield-api:8000']
     scrape_interval: 10s
 
-  # NeuroShield Worker
+  # NeuroShield Worker (with built-in metrics)
   - job_name: 'neuroshield-worker'
     metrics_path: /prometheus_metrics
     scheme: http
@@ -40,27 +34,22 @@ scrape_configs:
       - targets: ['neuroshield-worker:8000']
     scrape_interval: 10s
 
-  # Jenkins (if available)
-  - job_name: 'jenkins'
-    metrics_path: /prometheus/
-    scheme: http
+  # Optional: PostgreSQL Exporter (if postgres-exporter container is running)
+  - job_name: 'postgres-exporter'
     static_configs:
-      - targets: ['neuroshield-jenkins:8080']
-    scrape_interval: 30s
-    scrape_timeout: 10s
-
-  # PostgreSQL (via postgres-exporter if running)
-  - job_name: 'postgres'
-    static_configs:
-      - targets: ['neuroshield-postgres:5432']
+      - targets: ['neuroshield-postgres-exporter:9187']
     scrape_interval: 15s
-    metrics_path: /metrics
-    scheme: http
+    relabel_configs:
+      - action: replace
+        target_label: instance
+        replacement: neuroshield-postgres
 
-  # Redis (via redis-exporter if running)
-  - job_name: 'redis'
+  # Optional: Redis Exporter (if redis-exporter service is running)
+  - job_name: 'redis-exporter'
     static_configs:
-      - targets: ['neuroshield-redis:6379']
+      - targets: ['neuroshield-redis-exporter:9121']
     scrape_interval: 15s
-    metrics_path: /metrics
-    scheme: http
+    relabel_configs:
+      - action: replace
+        target_label: instance
+        replacement: neuroshield-redis

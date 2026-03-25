@@ -328,6 +328,7 @@ services:
       # Database (for direct queries)
       DATABASE_URL: postgresql://${DB_APP_USER:-neuroshield_app}:${DB_USER_PASSWORD}@postgres:5432/neuroshield_db
     volumes:
+      - ./src/dashboard:/app/src/dashboard:ro
       - ./data:/app/data:ro
       - ./logs:/app/logs:ro
     networks:

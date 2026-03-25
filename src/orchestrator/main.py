@@ -841,6 +841,13 @@ def main() -> None:
     _load_env()
 
     _print_banner()
+    
+    # Touch alive file immediately so healthcheck passes during model download
+    try:
+        with open("/tmp/orchestrator_alive", "w") as f:
+            f.write(str(time.time()))
+    except Exception:
+        pass
 
     # Read config from .env
     jenkins_url = _env("JENKINS_URL", "http://localhost:8080")
@@ -890,6 +897,13 @@ def main() -> None:
 
     try:
         while True:
+            # Update heartbeat file for Docker healthcheck
+            try:
+                with open("/tmp/orchestrator_alive", "w") as f:
+                    f.write(str(time.time()))
+            except Exception:
+                pass
+                
             cycle_count += 1
             _print_cycle_header(cycle_count)
 

@@ -1,5 +1,6 @@
 # NeuroShield Dashboard Service Dockerfile
-# Streamlit dashboard for real-time monitoring
+# OPTIMIZED: Lightweight Streamlit dashboard - no heavy ML dependencies
+# ~500MB instead of 9GB by using only dashboard requirements
 
 FROM python:3.11-slim
 
@@ -13,21 +14,16 @@ RUN apt-get update && apt-get install -y \
 # Create non-root user
 RUN groupadd -r neuroshield && useradd -r -g neuroshield -u 1000 neuroshield
 
-# Copy requirements - both main and dashboard specific
-COPY --chown=neuroshield:neuroshield requirements.txt .
-COPY --chown=neuroshield:neuroshield src/dashboard/requirements-dashboard.txt ./requirements-dashboard.txt
-RUN pip install --no-cache-dir -r requirements.txt && \
-    pip install --no-cache-dir -r requirements-dashboard.txt
+# Install ONLY dashboard-specific dependencies (no heavy ML libs)
+# This is the KEY OPTIMIZATION - skip requirements.txt with torch, transformers, etc
+COPY --chown=neuroshield:neuroshield src/dashboard/requirements-dashboard.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
-COPY --chown=neuroshield:neuroshield src/dashboard/ /app/src/dashboard/
-COPY --chown=neuroshield:neuroshield src/api/ /app/src/api/
-COPY --chown=neuroshield:neuroshield src/__init__.py /app/src/
-COPY --chown=neuroshield:neuroshield config.yaml /app/
-COPY --chown=neuroshield:neuroshield .env* /app/
+# Create directories with proper permissions (before copying code)
+RUN mkdir -p /app/data /app/logs /app/src && chown -R neuroshield:neuroshield /app
 
-# Create directories with proper permissions
-RUN mkdir -p /app/data /app/logs && chown -R neuroshield:neuroshield /app
+# Create stub __init__.py for package structure
+RUN touch /app/src/__init__.py && chown neuroshield:neuroshield /app/src/__init__.py
 
 # Environment variables
 ENV PYTHONUNBUFFERED=1 \
@@ -45,5 +41,5 @@ EXPOSE 8501
 HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=3 \
     CMD curl -f http://localhost:8501/_stcore/health || exit 1
 
-# Run Streamlit dashboard
+# Run Streamlit dashboard (code is volume-mounted from src/dashboard)
 CMD ["streamlit", "run", "src/dashboard/streamlit_dashboard.py", "--server.port=8501", "--server.address=0.0.0.0"]
