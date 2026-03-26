@@ -78,7 +78,21 @@ interface ServiceStatusEntry {
   status: 'online' | 'warning' | 'offline';
 }
 
-const WS_URL = 'ws://localhost/ws/telemetry';
+interface AuditLogEntry {
+  timestamp: string;
+  category: string;
+  action: string;
+  actor: string;
+  resource: string;
+  result: string;
+  details: Record<string, unknown>;
+  ip_address?: string;
+}
+
+type AuditFilter = 'ALL' | 'USER_ACTION' | 'HEALING_ACTION' | 'SECURITY_EVENT' | 'SYSTEM_EVENT';
+
+const WS_URL = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/telemetry`;
+const AUDIT_WS_URL = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/audit/ws`;
 const INITIAL_BACKOFF_MS = 3000;
 const MAX_BACKOFF_MS = 30000;
 const MAX_TIMELINE_ENTRIES = 50;
@@ -170,6 +184,12 @@ export default function App() {
   const [triggerState, setTriggerState] = useState<TriggerState>('READY');
   const [fixesUsedToday, setFixesUsedToday] = useState(0);
   const [stats, setStats] = useState<HealingStats | null>(null);
+
+  // Audit log state
+  const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
+  const [auditFilter, setAuditFilter] = useState<AuditFilter>('ALL');
+  const [auditConnected, setAuditConnected] = useState(false);
+  const auditWsRef = useRef<WebSocket | null>(null);
 
   const [animatedIncidentsResolved, setAnimatedIncidentsResolved] = useState(0);
   const [animatedMttrSeconds, setAnimatedMttrSeconds] = useState(0);
@@ -428,6 +448,67 @@ export default function App() {
       }
     };
   }, []);
+
+  // Audit WebSocket connection
+  useEffect(() => {
+    const connectAuditSocket = () => {
+      if (unmountedRef.current) return;
+
+      try {
+        const ws = new WebSocket(AUDIT_WS_URL);
+        auditWsRef.current = ws;
+
+        ws.onopen = () => {
+          setAuditConnected(true);
+        };
+
+        ws.onmessage = (event: MessageEvent<string>) => {
+          try {
+            const message = JSON.parse(event.data);
+
+            if (message.type === 'initial' && Array.isArray(message.data)) {
+              setAuditLogs(message.data as AuditLogEntry[]);
+            } else if (message.type === 'audit_event' && message.data) {
+              setAuditLogs((prev) => {
+                const newLogs = [message.data as AuditLogEntry, ...prev];
+                return newLogs.slice(0, 100); // Keep last 100 entries
+              });
+            }
+          } catch {
+            // Ignore malformed messages
+          }
+        };
+
+        ws.onclose = () => {
+          setAuditConnected(false);
+          if (!unmountedRef.current) {
+            // Reconnect after 5 seconds
+            window.setTimeout(connectAuditSocket, 5000);
+          }
+        };
+
+        ws.onerror = () => {
+          setAuditConnected(false);
+        };
+      } catch {
+        setAuditConnected(false);
+      }
+    };
+
+    connectAuditSocket();
+
+    return () => {
+      if (auditWsRef.current) {
+        auditWsRef.current.close();
+      }
+    };
+  }, []);
+
+  // Filtered audit logs
+  const filteredAuditLogs = useMemo(() => {
+    if (auditFilter === 'ALL') return auditLogs;
+    return auditLogs.filter((log) => log.category === auditFilter);
+  }, [auditLogs, auditFilter]);
 
   const triggerSelfHeal = async () => {
     if (triggerState === 'HEALING') return;
@@ -817,28 +898,69 @@ export default function App() {
         {activeTab === 'audit' && (
           <motion.section variants={panelItem} className="panel-surface rounded-xl border panel-border p-5">
             <div className="flex items-center justify-between gap-3 mb-4">
-              <h2 className="heading-font text-2xl text-primary-text">OPERATION AUDIT LOG</h2>
+              <div className="flex items-center gap-3">
+                <h2 className="heading-font text-2xl text-primary-text">REAL-TIME AUDIT LOG</h2>
+                {auditConnected ? (
+                  <div className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-emerald-500/20 border border-emerald-400/30">
+                    <span className="relative flex h-2 w-2">
+                      <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75 animate-ping"></span>
+                      <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400"></span>
+                    </span>
+                    <span className="text-xs text-accent-green metric-font">LIVE</span>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-red-500/20 border border-red-400/30">
+                    <span className="inline-flex h-2 w-2 rounded-full bg-red-500"></span>
+                    <span className="text-xs text-danger metric-font">OFFLINE</span>
+                  </div>
+                )}
+              </div>
               <div className="flex items-center gap-2">
-                {(['ALL', 'AUTO-FIX', 'ALERT', 'ESCALATED'] as TimelineFilter[]).map((filter) => (
+                {(['ALL', 'USER_ACTION', 'HEALING_ACTION', 'SECURITY_EVENT', 'SYSTEM_EVENT'] as AuditFilter[]).map((filter) => (
                   <button
                     key={filter}
                     type="button"
                     className={`px-2.5 py-1 rounded-md text-xs metric-font border ${
-                      timelineFilter === filter ? 'timeline-filter-active' : 'timeline-filter'
+                      auditFilter === filter ? 'timeline-filter-active' : 'timeline-filter'
                     }`}
-                    onClick={() => setTimelineFilter(filter)}
+                    onClick={() => setAuditFilter(filter)}
                   >
-                    {filter === 'AUTO-FIX' ? 'Auto-Fix' : filter === 'ALERT' ? 'Alerts' : filter}
+                    {filter === 'ALL' ? 'All' : filter.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, c => c.toUpperCase())}
                   </button>
                 ))}
               </div>
             </div>
 
+            <div className="grid grid-cols-4 gap-3 mb-4">
+              <div className="panel-subsurface rounded-lg p-3 border panel-border">
+                <div className="text-xs text-muted-text">Total Events</div>
+                <div className="metric-font text-xl text-primary-text">{auditLogs.length}</div>
+              </div>
+              <div className="panel-subsurface rounded-lg p-3 border panel-border">
+                <div className="text-xs text-muted-text">Healing Actions</div>
+                <div className="metric-font text-xl text-accent-green">
+                  {auditLogs.filter(l => l.category === 'HEALING_ACTION').length}
+                </div>
+              </div>
+              <div className="panel-subsurface rounded-lg p-3 border panel-border">
+                <div className="text-xs text-muted-text">Security Events</div>
+                <div className="metric-font text-xl" style={{ color: '#ffb800' }}>
+                  {auditLogs.filter(l => l.category === 'SECURITY_EVENT').length}
+                </div>
+              </div>
+              <div className="panel-subsurface rounded-lg p-3 border panel-border">
+                <div className="text-xs text-muted-text">Failed Actions</div>
+                <div className="metric-font text-xl text-danger">
+                  {auditLogs.filter(l => l.result === 'FAILURE' || l.result === 'DENIED').length}
+                </div>
+              </div>
+            </div>
+
             <div className="space-y-2 max-h-[30rem] overflow-auto pr-1">
               <AnimatePresence initial={false}>
-                {filteredTimeline.map((entry) => (
+                {filteredAuditLogs.map((entry, index) => (
                   <motion.div
-                    key={entry.id}
+                    key={`${entry.timestamp}-${entry.action}-${index}`}
                     initial={{ opacity: 0, x: -24 }}
                     animate={{ opacity: 1, x: 0 }}
                     exit={{ opacity: 0, x: 12 }}
@@ -847,35 +969,63 @@ export default function App() {
                     style={{
                       borderLeftWidth: '4px',
                       borderLeftColor:
-                        entry.badge === 'AUTO-FIX' ? '#00ff9d' : entry.badge === 'ALERT' ? '#ffb800' : '#ff3a3a',
+                        entry.result === 'SUCCESS' ? '#00ff9d' :
+                        entry.result === 'FAILURE' ? '#ff3a3a' :
+                        entry.result === 'DENIED' ? '#ff3a3a' : '#ffb800',
                     }}
                   >
                     <div className="flex flex-wrap items-center justify-between gap-3">
-                      <span className="metric-font text-xs text-muted-text">
-                        {new Date(entry.timestamp).toLocaleString()}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="metric-font text-xs text-muted-text">
+                          {new Date(entry.timestamp).toLocaleString()}
+                        </span>
+                        <span
+                          className="metric-font text-[10px] px-1.5 py-0.5 rounded"
+                          style={{
+                            background: entry.category === 'HEALING_ACTION' ? '#00ff9d20' :
+                                       entry.category === 'SECURITY_EVENT' ? '#ff3a3a20' :
+                                       entry.category === 'USER_ACTION' ? '#00e5ff20' : '#ffb80020',
+                            color: entry.category === 'HEALING_ACTION' ? '#00ff9d' :
+                                  entry.category === 'SECURITY_EVENT' ? '#ff3a3a' :
+                                  entry.category === 'USER_ACTION' ? '#00e5ff' : '#ffb800',
+                          }}
+                        >
+                          {entry.category.replace(/_/g, ' ')}
+                        </span>
+                      </div>
                       <span
                         className="metric-font text-[11px] px-2 py-0.5 rounded"
                         style={{
-                          color: entry.badge === 'AUTO-FIX' ? '#001a12' : '#201300',
+                          color: entry.result === 'SUCCESS' ? '#001a12' : '#201300',
                           background:
-                            entry.badge === 'AUTO-FIX'
-                              ? '#00ff9d'
-                              : entry.badge === 'ALERT'
-                                ? '#ffb800'
-                                : '#ff3a3a',
+                            entry.result === 'SUCCESS' ? '#00ff9d' :
+                            entry.result === 'FAILURE' ? '#ff3a3a' :
+                            entry.result === 'DENIED' ? '#ff3a3a' : '#ffb800',
                         }}
                       >
-                        {entry.badge}
+                        {entry.result}
                       </span>
                     </div>
-                    <div className="text-sm text-primary-text mt-2">{entry.action}</div>
-                    <div className="metric-font text-xs text-muted-text mt-1">confidence {entry.confidence}%</div>
+                    <div className="text-sm text-primary-text mt-2 font-medium">{entry.action}</div>
+                    <div className="flex items-center gap-4 mt-1">
+                      <span className="metric-font text-xs text-muted-text">Actor: {entry.actor}</span>
+                      <span className="metric-font text-xs text-muted-text">Resource: {entry.resource}</span>
+                      {entry.ip_address && (
+                        <span className="metric-font text-xs text-muted-text">IP: {entry.ip_address}</span>
+                      )}
+                    </div>
+                    {entry.details && Object.keys(entry.details).length > 0 && (
+                      <div className="mt-2 p-2 rounded bg-black/20 text-xs text-muted-text font-mono">
+                        {JSON.stringify(entry.details, null, 2).slice(0, 200)}
+                      </div>
+                    )}
                   </motion.div>
                 ))}
               </AnimatePresence>
-              {filteredTimeline.length === 0 && (
-                <div className="text-sm text-muted-text">No entries yet — waiting for healing events.</div>
+              {filteredAuditLogs.length === 0 && (
+                <div className="text-sm text-muted-text text-center py-8">
+                  No audit events yet — waiting for system activity.
+                </div>
               )}
             </div>
           </motion.section>

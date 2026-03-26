@@ -10,6 +10,8 @@ import logging
 from typing import Dict, Any
 from dataclasses import dataclass, asdict
 import asyncio
+import os
+from datetime import datetime
 
 import psutil
 from fastapi import APIRouter, Response
@@ -29,20 +31,19 @@ class HealthStatus:
 
 
 async def check_database() -> HealthStatus:
-    """Check PostgreSQL database connectivity."""
+    """Check database connectivity."""
     try:
-        from src.database import Session
+        from src.database import get_database
 
         start = asyncio.get_event_loop().time()
-        session = Session()
-        session.execute("SELECT 1")
-        session.close()
+        db = get_database()
+        db.get_statistics()  # Test connectivity
         latency = (asyncio.get_event_loop().time() - start) * 1000
 
         return HealthStatus(
             status="ok",
             latency_ms=latency,
-            details={"type": "postgresql"}
+            details={"type": "sqlite"}
         )
     except Exception as e:
         logger.error(f"Database health check failed: {e}")
@@ -110,14 +111,21 @@ async def check_prometheus() -> HealthStatus:
 
         prom = PrometheusClient()
         start = asyncio.get_event_loop().time()
-        prom.query("up")
+        healthy = prom.is_healthy()  # Use public method
         latency = (asyncio.get_event_loop().time() - start) * 1000
 
-        return HealthStatus(
-            status="ok",
-            latency_ms=latency,
-            details={"type": "prometheus", "url": prom.url}
-        )
+        if healthy:
+            return HealthStatus(
+                status="ok",
+                latency_ms=latency,
+                details={"type": "prometheus", "url": prom.url}
+            )
+        else:
+            return HealthStatus(
+                status="degraded",
+                latency_ms=latency,
+                details={"note": "Prometheus not healthy"}
+            )
     except Exception as e:
         logger.error(f"Prometheus health check failed: {e}")
         return HealthStatus(
@@ -238,8 +246,3 @@ async def health():
     """Default health check (Kubernetes uses /health/ready)."""
     ready = await readiness_probe()
     return ready
-
-
-import os
-from datetime import datetime
-

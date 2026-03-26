@@ -133,6 +133,19 @@ def log_audit_event(
         **event.to_dict()
     )
 
+    # Push to real-time audit streaming (async-safe)
+    try:
+        import asyncio
+        from src.api.routers.audit import push_audit_event
+
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.create_task(push_audit_event(event.to_dict()))
+        else:
+            loop.run_until_complete(push_audit_event(event.to_dict()))
+    except Exception:
+        pass  # Don't break audit logging if streaming fails
+
 
 def log_healing_action(
     action_name: str,

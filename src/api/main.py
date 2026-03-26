@@ -28,7 +28,7 @@ from fastapi.responses import PlainTextResponse
 
 load_dotenv()
 
-from src.api.routers import demo, healing, mttr, prediction, report, status, telemetry  # noqa: E402
+from src.api.routers import audit, demo, healing, mttr, prediction, report, status, telemetry  # noqa: E402
 from src.api.models import AlertManagerWebhookPayload  # noqa: E402
 from src.events.webhook_server import get_event_queue  # noqa: E402
 
@@ -66,6 +66,7 @@ app.include_router(prediction.router)
 app.include_router(mttr.router)
 app.include_router(demo.router)
 app.include_router(report.router)
+app.include_router(audit.router)
 
 _app_start_time = time.time()
 _DATA_DIR = Path(__file__).resolve().parents[2] / "data"
@@ -416,4 +417,13 @@ async def prometheus_metrics():
         "# TYPE neuroshield_active_alerts gauge",
         f"neuroshield_active_alerts {active_alerts}",
     ]
+
+    # Add audit metrics
+    try:
+        from src.api.routers.audit import get_audit_prometheus_metrics
+        lines.append("")
+        lines.append(get_audit_prometheus_metrics())
+    except Exception:
+        pass
+
     return "\n".join(lines)

@@ -85,6 +85,7 @@ services:
       - "127.0.0.1:9090:9090"
     volumes:
       - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infra/prometheus/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
       - prometheus_data:/prometheus
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
@@ -333,7 +334,7 @@ services:
     image: neuroshield-dashboard:${VERSION:-latest}
     container_name: neuroshield-dashboard
     ports:
-      - "127.0.0.1:8501:8501"
+      - "127.0.0.1:8501:80"
     environment:
       ENVIRONMENT: ${ENVIRONMENT:-production}
       LOG_LEVEL: ${LOG_LEVEL:-info}
@@ -358,7 +359,7 @@ services:
           memory: 512M
     healthcheck:
       test:
-        ["CMD-SHELL", "wget --spider -q http://127.0.0.1/ || exit 1"]
+        ["CMD-SHELL", "wget --spider -q http://127.0.0.1:80/ || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 3
