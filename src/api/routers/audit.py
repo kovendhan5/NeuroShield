@@ -308,6 +308,16 @@ def get_audit_prometheus_metrics() -> str:
     lines.append("# TYPE neuroshield_audit_by_category counter")
     for category, count in _audit_metrics["by_category"].items():
         lines.append(f'neuroshield_audit_by_category{{category="{category}"}} {count}')
+    for baseline_category in (
+        "USER_ACTION",
+        "HEALING_ACTION",
+        "SECURITY_EVENT",
+        "SYSTEM_EVENT",
+        "CONFIG_CHANGE",
+        "DATA_ACCESS",
+    ):
+        if baseline_category not in _audit_metrics["by_category"]:
+            lines.append(f'neuroshield_audit_by_category{{category="{baseline_category}"}} 0')
     lines.append("")
 
     # Events by result
@@ -315,6 +325,9 @@ def get_audit_prometheus_metrics() -> str:
     lines.append("# TYPE neuroshield_audit_by_result counter")
     for result, count in _audit_metrics["by_result"].items():
         lines.append(f'neuroshield_audit_by_result{{result="{result}"}} {count}')
+    for baseline_result in ("SUCCESS", "FAILURE", "DENIED"):
+        if baseline_result not in _audit_metrics["by_result"]:
+            lines.append(f'neuroshield_audit_by_result{{result="{baseline_result}"}} 0')
     lines.append("")
 
     # WebSocket clients

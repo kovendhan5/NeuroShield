@@ -62,7 +62,7 @@
       "pluginVersion": "8.0.0",
       "targets": [
         {
-          "expr": "orchestrator_healing_actions_total",
+            "expr": "neuroshield_healing_actions_total",
           "legendFormat": "Total Actions",
           "refId": "A"
         }
@@ -114,7 +114,7 @@
       "pluginVersion": "8.0.0",
       "targets": [
         {
-          "expr": "orchestrator_healing_actions_success_total",
+            "expr": "neuroshield_healing_actions_total * neuroshield_healing_success_rate",
           "legendFormat": "Successful",
           "refId": "A"
         }
@@ -166,7 +166,7 @@
       "pluginVersion": "8.0.0",
       "targets": [
         {
-          "expr": "orchestrator_failures_detected_total",
+            "expr": "neuroshield_healing_actions_total * (1 - neuroshield_healing_success_rate)",
           "legendFormat": "Detected",
           "refId": "A"
         }
@@ -251,7 +251,7 @@
       "pluginVersion": "8.0.0",
       "targets": [
         {
-          "expr": "orchestrator_failure_prediction_probability",
+            "expr": "1 - neuroshield_healing_success_rate",
           "legendFormat": "Failure Probability",
           "refId": "A"
         }
@@ -328,7 +328,7 @@
       "pluginVersion": "8.0.0",
       "targets": [
         {
-          "expr": "orchestrator_healing_duration_seconds",
+            "expr": "neuroshield_mttr_seconds",
           "legendFormat": "{{action}} Duration",
           "refId": "A"
         }
@@ -404,7 +404,7 @@
       "pluginVersion": "8.0.0",
       "targets": [
         {
-          "expr": "increase(orchestrator_healing_actions_total{action=~\"restart_pod|scale_up|retry_build|rollback_deploy|clear_cache|escalate_to_human\"}[1h])",
+            "expr": "increase(neuroshield_healing_by_action[1h])",
           "legendFormat": "{{action}}",
           "refId": "A"
         }

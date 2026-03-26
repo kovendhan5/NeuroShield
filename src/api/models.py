@@ -170,3 +170,27 @@ class AlertManagerWebhookPayload(BaseModel):
     version: Optional[str] = None
     groupKey: Optional[str] = None
     truncatedAlerts: Optional[int] = None
+
+
+class PipelineEventPayload(BaseModel):
+    pipeline_id: str
+    project: str
+    use_case: str
+    environment: str = "production"
+    deploy_target: str = "kubernetes"
+    status: str
+    success: bool
+    k8s_namespace: str
+    k8s_deployment: str
+    deployment_url: Optional[str] = None
+    duration_seconds: Optional[float] = None
+    build_number: Optional[str] = None
+    failed_pods: Optional[int] = None
+    pod_restarts_total: Optional[int] = None
+    error_message: Optional[str] = None
+    stage: Optional[str] = None
+    incident_kind: Optional[str] = None
+    healed_by: Optional[str] = None
+    heal_action: Optional[str] = None
+    build_url: Optional[str] = None
+    timestamp: Optional[str] = None

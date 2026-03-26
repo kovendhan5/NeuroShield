@@ -116,6 +116,95 @@ services:
         max-size: "50m"
         max-file: "5"
 
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: neuroshield-node-exporter
+    ports:
+      - "127.0.0.1:9100:9100"
+    networks:
+      - neuroshield-net
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
+    healthcheck:
+      test:
+        ["CMD-SHELL", "wget --spider -q http://localhost:9100/metrics || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:latest
+    container_name: neuroshield-postgres-exporter
+    environment:
+      DATA_SOURCE_NAME: "postgresql://${DB_APP_USER:-neuroshield_app}:${DB_USER_PASSWORD:?App database password required}@postgres:5432/neuroshield_db?sslmode=disable"
+    ports:
+      - "127.0.0.1:9187:9187"
+    networks:
+      - neuroshield-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
+    healthcheck:
+      test:
+        ["CMD-SHELL", "wget --spider -q http://localhost:9187/metrics || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  redis-exporter:
+    image: oliver006/redis_exporter:latest
+    container_name: neuroshield-redis-exporter
+    environment:
+      REDIS_ADDR: "redis://redis:6379"
+      REDIS_PASSWORD: "${REDIS_PASSWORD:?Redis password required}"
+    ports:
+      - "127.0.0.1:9121:9121"
+    networks:
+      - neuroshield-net
+    depends_on:
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
+    healthcheck:
+      test:
+        ["CMD-SHELL", "wget --spider -q http://localhost:9121/metrics || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
+
   grafana:
     image: grafana/grafana:latest
     container_name: neuroshield-grafana
@@ -161,7 +250,10 @@ services:
   #═══════════════════════════════════════════════════════════════════════════
 
   jenkins:
-    image: jenkins/jenkins:lts-alpine
+    image: neuroshield-jenkins:latest
+    build:
+      context: ./infra/jenkins-builder
+      dockerfile: Dockerfile.jenkins
     container_name: neuroshield-jenkins
     user: "1000:1000"
     ports:
@@ -170,8 +262,12 @@ services:
     environment:
       JENKINS_OPTS: "--httpPort=8080"
       JAVA_OPTS: "-Xmx512m -Xms256m"
+      KUBECONFIG: /var/jenkins_home/.kube/config
     volumes:
       - jenkins_data:/var/jenkins_home
+      - ./data/kubeconfig.jenkins.yaml:/var/jenkins_home/.kube/config:ro
+    extra_hosts:
+      - "neuroshield:192.168.49.2"
     networks:
       - neuroshield-net
     deploy:
@@ -231,6 +327,7 @@ services:
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
+      - ./models:/app/models:ro
     networks:
       - neuroshield-net
     depends_on:

@@ -26,6 +26,12 @@ scrape_configs:
       - targets: ['neuroshield-api:8000']
     scrape_interval: 10s
 
+  # Node exporter metrics for real host CPU/memory telemetry
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['neuroshield-node-exporter:9100']
+    scrape_interval: 10s
+
   # Optional: PostgreSQL Exporter (if postgres-exporter container is running)
   - job_name: 'postgres-exporter'
     static_configs:
