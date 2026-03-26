@@ -1,11 +1,28 @@
 import { Activity, AlertTriangle, CheckCircle2, Clock3, Cpu, Gauge, MemoryStick, ShieldAlert } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import {
+  Area,
+  AreaChart,
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Legend,
+  Line,
+  LineChart,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
 
 type TriggerState = 'READY' | 'HEALING' | 'COMPLETE';
 type TimelineFilter = 'ALL' | 'AUTO-FIX' | 'ALERT' | 'ESCALATED';
 type BadgeType = 'AUTO-FIX' | 'ALERT' | 'ESCALATED';
+type DashboardTab = 'overview' | 'analytics' | 'health' | 'audit';
 
 interface RecentFix {
   type: 'fix';
@@ -29,6 +46,7 @@ interface ChartPoint {
   cpu: number;
   memory: number;
   health: number;
+  alerts: number;
 }
 
 interface HealingHistoryEntry {
@@ -135,6 +153,7 @@ function todayKey(date: Date): string {
 }
 
 export default function App() {
+  const [activeTab, setActiveTab] = useState<DashboardTab>('overview');
   const [connected, setConnected] = useState(false);
   const [clockText, setClockText] = useState(new Date().toLocaleTimeString());
   const [telemetry, setTelemetry] = useState<TelemetryMessage>({
@@ -216,6 +235,33 @@ export default function App() {
 
   const isLimitReached = fixesUsedToday >= DAILY_TRIGGER_LIMIT;
   const remainingFixes = Math.max(0, DAILY_TRIGGER_LIMIT - fixesUsedToday);
+
+  const actionDistribution = useMemo(() => {
+    const counts = timelineEntries.reduce<Record<BadgeType, number>>(
+      (acc, entry) => {
+        acc[entry.badge] += 1;
+        return acc;
+      },
+      { 'AUTO-FIX': 0, ALERT: 0, ESCALATED: 0 },
+    );
+    return [
+      { name: 'Auto-Fix', value: counts['AUTO-FIX'], fill: '#00ff9d' },
+      { name: 'Alert', value: counts.ALERT, fill: '#ffb800' },
+      { name: 'Escalated', value: counts.ESCALATED, fill: '#ff3a3a' },
+    ];
+  }, [timelineEntries]);
+
+  const resilienceTrend = useMemo(() => {
+    const source = chartData.length > 0
+      ? chartData
+      : [{ time: new Date(telemetry.timestamp).toLocaleTimeString(), cpu: telemetry.cpu, memory: telemetry.memory, health: telemetry.health_score, alerts: telemetry.active_alerts }];
+    return source.map((point) => ({
+      time: point.time,
+      health: clamp(point.health, 0, 100),
+      confidence: clamp(point.health + 3, 0, 100),
+      incidents: clamp(point.alerts, 0, 10),
+    }));
+  }, [chartData, telemetry.timestamp, telemetry.cpu, telemetry.memory, telemetry.health_score, telemetry.active_alerts]);
 
   useEffect(() => {
     unmountedRef.current = false;
@@ -333,6 +379,7 @@ export default function App() {
                 cpu: clamp(payload.cpu, 0, 100),
                 memory: clamp(payload.memory, 0, 100),
                 health: clamp(payload.health_score, 0, 100),
+                alerts: clamp(payload.active_alerts, 0, 10),
               };
               const next = [...prev, nextPoint];
               return next.slice(-40);
@@ -478,97 +525,299 @@ export default function App() {
           </div>
         </motion.section>
 
-        <motion.section variants={panelItem} className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          {[
-            {
-              label: 'Incidents Resolved',
-              value: animatedIncidentsResolved.toString(),
-              hint: 'today',
-              icon: <CheckCircle2 size={20} color="#00ff9d" />,
-            },
-            {
-              label: 'MTTR',
-              value: `${animatedMttrSeconds}s`,
-              hint: 'current estimate',
-              icon: <Clock3 size={20} color="#00e5ff" />,
-            },
-            {
-              label: 'Active Alerts',
-              value: animatedActiveAlerts.toString(),
-              hint: 'open incidents',
-              icon: <AlertTriangle size={20} color="#ffb800" />,
-            },
-            {
-              label: 'AI Confidence',
-              value: `${animatedAIConfidence}%`,
-              hint: 'autonomous confidence',
-              icon: <Gauge size={20} color="#00e5ff" />,
-            },
-          ].map((card) => (
-            <motion.div key={card.label} variants={panelItem} className="panel-surface rounded-xl p-5 border panel-border">
-              <div className="flex items-center justify-between">
-                <span className="text-xs uppercase tracking-widest text-muted-text">{card.label}</span>
-                {card.icon}
-              </div>
-              <div className="metric-font text-4xl mt-3 text-primary-text">{card.value}</div>
-              <div className="text-xs text-muted-text mt-1">{card.hint}</div>
-            </motion.div>
+        <motion.nav variants={panelItem} className="panel-surface rounded-xl border panel-border p-2 flex items-center gap-2">
+          {([
+            { key: 'overview', label: 'Overview' },
+            { key: 'analytics', label: 'Analytics' },
+            { key: 'health', label: 'Health' },
+            { key: 'audit', label: 'Audit Log' },
+          ] as { key: DashboardTab; label: string }[]).map((tab) => (
+            <button
+              key={tab.key}
+              type="button"
+              onClick={() => setActiveTab(tab.key)}
+              className={`px-4 py-2 rounded-md text-sm metric-font border ${
+                activeTab === tab.key ? 'timeline-filter-active' : 'timeline-filter'
+              }`}
+            >
+              {tab.label}
+            </button>
           ))}
-        </motion.section>
+        </motion.nav>
 
-        <motion.section variants={panelItem} className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="panel-surface rounded-xl border panel-border p-5 lg:col-span-2">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="heading-font text-2xl text-primary-text">REAL-TIME TELEMETRY</h2>
-              <span className="metric-font text-xs text-muted-text">WebSocket stream</span>
-            </div>
-            <div className="h-72">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={chartData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(74,96,112,0.25)" />
-                  <XAxis dataKey="time" stroke="#4a6070" tickLine={false} axisLine={false} />
-                  <YAxis stroke="#4a6070" tickLine={false} axisLine={false} domain={[0, 100]} />
-                  <Tooltip
-                    contentStyle={{
-                      background: '#141920',
-                      border: '1px solid rgba(74,96,112,0.35)',
-                      color: '#c8d8e8',
-                    }}
-                  />
-                  <Line type="monotone" dataKey="health" stroke="#00e5ff" strokeWidth={2.5} dot={false} />
-                  <Line type="monotone" dataKey="cpu" stroke="#00ff9d" strokeWidth={2} dot={false} />
-                  <Line type="monotone" dataKey="memory" stroke="#ffb800" strokeWidth={2} dot={false} />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-
-          <div className="panel-surface rounded-xl border panel-border p-5">
-            <h2 className="heading-font text-2xl text-primary-text mb-4">SERVICE HEALTH</h2>
-            <div className="space-y-3">
-              {serviceStatuses.map((service) => (
-                <div key={service.name} className="flex items-center justify-between">
-                  <span className="text-sm text-primary-text">{service.name}</span>
-                  <span
-                    className="inline-flex h-3 w-3 rounded-full"
-                    style={{
-                      backgroundColor:
-                        service.status === 'online' ? '#00ff9d' : service.status === 'warning' ? '#ffb800' : '#ff3a3a',
-                      boxShadow: `0 0 12px ${
-                        service.status === 'online' ? '#00ff9d' : service.status === 'warning' ? '#ffb800' : '#ff3a3a'
-                      }`,
-                    }}
-                  />
-                </div>
+        {activeTab === 'overview' && (
+          <>
+            <motion.section variants={panelItem} className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              {[
+                {
+                  label: 'Incidents Resolved',
+                  value: animatedIncidentsResolved.toString(),
+                  hint: 'today',
+                  icon: <CheckCircle2 size={20} color="#00ff9d" />,
+                },
+                {
+                  label: 'MTTR',
+                  value: `${animatedMttrSeconds}s`,
+                  hint: 'current estimate',
+                  icon: <Clock3 size={20} color="#00e5ff" />,
+                },
+                {
+                  label: 'Active Alerts',
+                  value: animatedActiveAlerts.toString(),
+                  hint: 'open incidents',
+                  icon: <AlertTriangle size={20} color="#ffb800" />,
+                },
+                {
+                  label: 'AI Confidence',
+                  value: `${animatedAIConfidence}%`,
+                  hint: 'autonomous confidence',
+                  icon: <Gauge size={20} color="#00e5ff" />,
+                },
+              ].map((card) => (
+                <motion.div key={card.label} variants={panelItem} className="panel-surface rounded-xl p-5 border panel-border">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs uppercase tracking-widest text-muted-text">{card.label}</span>
+                    {card.icon}
+                  </div>
+                  <div className="metric-font text-4xl mt-3 text-primary-text">{card.value}</div>
+                  <div className="text-xs text-muted-text mt-1">{card.hint}</div>
+                </motion.div>
               ))}
-            </div>
-          </div>
-        </motion.section>
+            </motion.section>
 
-        <motion.section variants={panelItem} className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div className="panel-surface rounded-xl border panel-border p-5">
+            <motion.section variants={panelItem} className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              <div className="panel-surface rounded-xl border panel-border p-5 lg:col-span-2">
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="heading-font text-2xl text-primary-text">REAL-TIME TELEMETRY</h2>
+                  <span className="metric-font text-xs text-muted-text">WebSocket stream</span>
+                </div>
+                <div className="h-72">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={chartData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(74,96,112,0.25)" />
+                      <XAxis dataKey="time" stroke="#4a6070" tickLine={false} axisLine={false} />
+                      <YAxis stroke="#4a6070" tickLine={false} axisLine={false} domain={[0, 100]} />
+                      <Tooltip
+                        contentStyle={{
+                          background: '#141920',
+                          border: '1px solid rgba(74,96,112,0.35)',
+                          color: '#c8d8e8',
+                        }}
+                      />
+                      <Line type="monotone" dataKey="health" stroke="#00e5ff" strokeWidth={2.5} dot={false} />
+                      <Line type="monotone" dataKey="cpu" stroke="#00ff9d" strokeWidth={2} dot={false} />
+                      <Line type="monotone" dataKey="memory" stroke="#ffb800" strokeWidth={2} dot={false} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+
+              <div className="panel-surface rounded-xl border panel-border p-5">
+                <h2 className="heading-font text-2xl text-primary-text mb-4">SERVICE HEALTH</h2>
+                <div className="space-y-3">
+                  {serviceStatuses.map((service) => (
+                    <div key={service.name} className="flex items-center justify-between">
+                      <span className="text-sm text-primary-text">{service.name}</span>
+                      <span
+                        className="inline-flex h-3 w-3 rounded-full"
+                        style={{
+                          backgroundColor:
+                            service.status === 'online' ? '#00ff9d' : service.status === 'warning' ? '#ffb800' : '#ff3a3a',
+                          boxShadow: `0 0 12px ${
+                            service.status === 'online' ? '#00ff9d' : service.status === 'warning' ? '#ffb800' : '#ff3a3a'
+                          }`,
+                        }}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </motion.section>
+
+            <motion.section variants={panelItem} className="panel-surface rounded-xl border panel-border p-5">
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <div>
+                  <h2 className="heading-font text-2xl text-primary-text">MANUAL CONTROL</h2>
+                  <div className="metric-font text-sm text-muted-text mt-1">
+                    {fixesUsedToday} / {DAILY_TRIGGER_LIMIT} fixes used today
+                    {stats ? ` • success rate ${(stats.success_rate * 100).toFixed(0)}%` : ''}
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => void triggerSelfHeal()}
+                    disabled={triggerState === 'HEALING' || isLimitReached}
+                    className={`px-5 py-3 rounded-lg border metric-font text-sm ${
+                      isLimitReached
+                        ? 'trigger-disabled'
+                        : triggerState === 'HEALING'
+                          ? 'trigger-healing'
+                          : triggerState === 'COMPLETE'
+                            ? 'trigger-complete'
+                            : 'trigger-ready'
+                    }`}
+                  >
+                    {isLimitReached
+                      ? 'DAILY LIMIT REACHED (5/5)'
+                      : triggerState === 'HEALING'
+                        ? '⬡ HEALING IN PROGRESS...'
+                        : triggerState === 'COMPLETE'
+                          ? '⬡ COMPLETE'
+                          : '⬡ TRIGGER SELF-HEAL'}
+                  </button>
+                  <span className="metric-font text-xs text-muted-text">{remainingFixes} remaining</span>
+                </div>
+              </div>
+            </motion.section>
+          </>
+        )}
+
+        {activeTab === 'analytics' && (
+          <>
+            <motion.section variants={panelItem} className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              <div className="panel-surface rounded-xl border panel-border p-5 lg:col-span-2">
+                <h2 className="heading-font text-2xl text-primary-text">SYSTEM RESILIENCE TREND</h2>
+                <p className="metric-font text-xs text-muted-text mb-4">Auto-healing success & model confidence over time</p>
+                <div className="h-72">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart data={resilienceTrend}>
+                      <defs>
+                        <linearGradient id="resilienceFill" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#00e5ff" stopOpacity={0.28} />
+                          <stop offset="95%" stopColor="#00e5ff" stopOpacity={0.02} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(74,96,112,0.25)" />
+                      <XAxis dataKey="time" stroke="#4a6070" tickLine={false} axisLine={false} />
+                      <YAxis stroke="#4a6070" tickLine={false} axisLine={false} domain={[0, 100]} />
+                      <Tooltip
+                        contentStyle={{
+                          background: '#141920',
+                          border: '1px solid rgba(74,96,112,0.35)',
+                          color: '#c8d8e8',
+                        }}
+                      />
+                      <Legend />
+                      <Area type="monotone" dataKey="health" stroke="#00e5ff" fill="url(#resilienceFill)" strokeWidth={2.2} name="Health Score" />
+                      <Line type="monotone" dataKey="confidence" stroke="#00ff9d" strokeWidth={2} dot={false} name="AI Confidence" />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+
+              <div className="panel-surface rounded-xl border panel-border p-5">
+                <h2 className="heading-font text-2xl text-primary-text">ACTION DISTRIBUTION</h2>
+                <p className="metric-font text-xs text-muted-text mb-4">Mix of intervention types</p>
+                <div className="h-72">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie data={actionDistribution} dataKey="value" nameKey="name" innerRadius={56} outerRadius={86} paddingAngle={4}>
+                        {actionDistribution.map((entry) => (
+                          <Cell key={entry.name} fill={entry.fill} />
+                        ))}
+                      </Pie>
+                      <Tooltip
+                        contentStyle={{
+                          background: '#141920',
+                          border: '1px solid rgba(74,96,112,0.35)',
+                          color: '#c8d8e8',
+                        }}
+                      />
+                      <Legend />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            </motion.section>
+
+            <motion.section variants={panelItem} className="panel-surface rounded-xl border panel-border p-5">
+              <h2 className="heading-font text-2xl text-primary-text">ANOMALY LOAD</h2>
+              <p className="metric-font text-xs text-muted-text mb-4">Alert pressure trend from live telemetry stream</p>
+              <div className="h-72">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={resilienceTrend}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(74,96,112,0.25)" />
+                    <XAxis dataKey="time" stroke="#4a6070" tickLine={false} axisLine={false} />
+                    <YAxis stroke="#4a6070" tickLine={false} axisLine={false} />
+                    <Tooltip
+                      contentStyle={{
+                        background: '#141920',
+                        border: '1px solid rgba(74,96,112,0.35)',
+                        color: '#c8d8e8',
+                      }}
+                    />
+                    <Bar dataKey="incidents" fill="#8b5cf6" radius={[6, 6, 0, 0]} name="Active Incidents" />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </motion.section>
+          </>
+        )}
+
+        {activeTab === 'health' && (
+          <motion.section variants={panelItem} className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div className="panel-surface rounded-xl border panel-border p-5">
+              <h2 className="heading-font text-2xl text-primary-text mb-4">SERVICE HEALTH MATRIX</h2>
+              <div className="space-y-3">
+                {serviceStatuses.map((service) => (
+                  <div key={service.name} className="flex items-center justify-between border panel-border rounded-lg p-3 panel-subsurface">
+                    <span className="text-sm text-primary-text">{service.name}</span>
+                    <span
+                      className="metric-font text-xs px-2 py-1 rounded"
+                      style={{
+                        color: service.status === 'online' ? '#001a12' : service.status === 'warning' ? '#201300' : '#2b0000',
+                        backgroundColor:
+                          service.status === 'online' ? '#00ff9d' : service.status === 'warning' ? '#ffb800' : '#ff3a3a',
+                      }}
+                    >
+                      {service.status.toUpperCase()}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="panel-surface rounded-xl border panel-border p-5">
+              <h2 className="heading-font text-2xl text-primary-text mb-4">CLUSTER RESOURCE USAGE</h2>
+              <div className="space-y-4">
+                {resourceUsage.map((resource, index) => (
+                  <motion.div key={resource.name} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.1 + index * 0.08 }}>
+                    <div className="flex items-center justify-between mb-1">
+                      <div className="flex items-center gap-2 text-sm text-primary-text">
+                        <span style={{ color: '#00e5ff' }}>{resource.icon}</span>
+                        {resource.name}
+                      </div>
+                      <div className="metric-font text-sm text-primary-text">{resource.value.toFixed(1)}%</div>
+                    </div>
+                    <div className="h-3 rounded-full resource-track overflow-hidden">
+                      <motion.div
+                        className="h-full"
+                        initial={{ width: 0 }}
+                        animate={{ width: `${resource.value}%` }}
+                        transition={{ duration: 0.7, ease: 'easeOut' }}
+                        style={{ backgroundColor: resourceBarColor(resource.value) }}
+                      />
+                    </div>
+                  </motion.div>
+                ))}
+              </div>
+
+              <div className="border panel-border rounded-lg p-3 panel-subsurface mt-6">
+                <div className="metric-font text-xs text-muted-text uppercase">Telemetry Diagnostics</div>
+                <div className="text-sm text-primary-text mt-2">Last Frame: {new Date(telemetry.timestamp).toLocaleTimeString()}</div>
+                <div className="text-sm text-primary-text mt-1">Connection: {connected ? 'LIVE WebSocket' : 'RECONNECTING'}</div>
+                <div className="text-sm text-primary-text mt-1">Open Alerts: {telemetry.active_alerts}</div>
+              </div>
+            </div>
+          </motion.section>
+        )}
+
+        {activeTab === 'audit' && (
+          <motion.section variants={panelItem} className="panel-surface rounded-xl border panel-border p-5">
             <div className="flex items-center justify-between gap-3 mb-4">
-              <h2 className="heading-font text-2xl text-primary-text">AI FIX TIMELINE</h2>
+              <h2 className="heading-font text-2xl text-primary-text">OPERATION AUDIT LOG</h2>
               <div className="flex items-center gap-2">
                 {(['ALL', 'AUTO-FIX', 'ALERT', 'ESCALATED'] as TimelineFilter[]).map((filter) => (
                   <button
@@ -585,7 +834,7 @@ export default function App() {
               </div>
             </div>
 
-            <div className="space-y-2 max-h-80 overflow-auto pr-1">
+            <div className="space-y-2 max-h-[30rem] overflow-auto pr-1">
               <AnimatePresence initial={false}>
                 {filteredTimeline.map((entry) => (
                   <motion.div
@@ -601,9 +850,9 @@ export default function App() {
                         entry.badge === 'AUTO-FIX' ? '#00ff9d' : entry.badge === 'ALERT' ? '#ffb800' : '#ff3a3a',
                     }}
                   >
-                    <div className="flex items-center justify-between gap-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
                       <span className="metric-font text-xs text-muted-text">
-                        {new Date(entry.timestamp).toLocaleTimeString()}
+                        {new Date(entry.timestamp).toLocaleString()}
                       </span>
                       <span
                         className="metric-font text-[11px] px-2 py-0.5 rounded"
@@ -625,73 +874,12 @@ export default function App() {
                   </motion.div>
                 ))}
               </AnimatePresence>
+              {filteredTimeline.length === 0 && (
+                <div className="text-sm text-muted-text">No entries yet — waiting for healing events.</div>
+              )}
             </div>
-          </div>
-
-          <div className="panel-surface rounded-xl border panel-border p-5">
-            <h2 className="heading-font text-2xl text-primary-text mb-4">CLUSTER RESOURCE USAGE</h2>
-            <div className="space-y-4">
-              {resourceUsage.map((resource, index) => (
-                <motion.div key={resource.name} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 + index * 0.08 }}>
-                  <div className="flex items-center justify-between mb-1">
-                    <div className="flex items-center gap-2 text-sm text-primary-text">
-                      <span style={{ color: '#00e5ff' }}>{resource.icon}</span>
-                      {resource.name}
-                    </div>
-                    <div className="metric-font text-sm text-primary-text">{resource.value.toFixed(1)}%</div>
-                  </div>
-                  <div className="h-3 rounded-full resource-track overflow-hidden">
-                    <motion.div
-                      className="h-full"
-                      initial={{ width: 0 }}
-                      animate={{ width: `${resource.value}%` }}
-                      transition={{ duration: 0.7, ease: 'easeOut' }}
-                      style={{ backgroundColor: resourceBarColor(resource.value) }}
-                    />
-                  </div>
-                </motion.div>
-              ))}
-            </div>
-          </div>
-        </motion.section>
-
-        <motion.section variants={panelItem} className="panel-surface rounded-xl border panel-border p-5">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div>
-              <h2 className="heading-font text-2xl text-primary-text">MANUAL CONTROL</h2>
-              <div className="metric-font text-sm text-muted-text mt-1">
-                {fixesUsedToday} / {DAILY_TRIGGER_LIMIT} fixes used today
-                {stats ? ` • success rate ${(stats.success_rate * 100).toFixed(0)}%` : ''}
-              </div>
-            </div>
-
-            <div className="flex items-center gap-3">
-              <button
-                type="button"
-                onClick={() => void triggerSelfHeal()}
-                disabled={triggerState === 'HEALING' || isLimitReached}
-                className={`px-5 py-3 rounded-lg border metric-font text-sm ${
-                  isLimitReached
-                    ? 'trigger-disabled'
-                    : triggerState === 'HEALING'
-                      ? 'trigger-healing'
-                      : triggerState === 'COMPLETE'
-                        ? 'trigger-complete'
-                        : 'trigger-ready'
-                }`}
-              >
-                {isLimitReached
-                  ? 'DAILY LIMIT REACHED (5/5)'
-                  : triggerState === 'HEALING'
-                    ? '⬡ HEALING IN PROGRESS...'
-                    : triggerState === 'COMPLETE'
-                      ? '⬡ COMPLETE'
-                      : '⬡ TRIGGER SELF-HEAL'}
-              </button>
-              <span className="metric-font text-xs text-muted-text">{remainingFixes} remaining</span>
-            </div>
-          </div>
-        </motion.section>
+          </motion.section>
+        )}
       </motion.div>
     </div>
   );

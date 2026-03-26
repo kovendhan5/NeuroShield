@@ -243,7 +243,7 @@ services:
           cpus: "0.5"
           memory: 512M
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD-SHELL", "python -c \"import websockets\" >/dev/null 2>&1 && curl -f http://localhost:8000/health"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -358,7 +358,7 @@ services:
           memory: 512M
     healthcheck:
       test:
-        ["CMD-SHELL", "wget --spider -q http://localhost/ || exit 1"]
+        ["CMD-SHELL", "wget --spider -q http://127.0.0.1/ || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -373,7 +373,6 @@ services:
   nginx:
     image: nginx:1.25-alpine
     container_name: neuroshield-nginx
-    user: "101:101"
     ports:
       - "80:80"
     volumes:
@@ -391,7 +390,7 @@ services:
           memory: 128M
     healthcheck:
       test:
-        ["CMD-SHELL", "wget --spider -q http://localhost/ || exit 1"]
+        ["CMD-SHELL", "wget --spider -q http://127.0.0.1/ || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -411,9 +410,6 @@ networks:
   neuroshield-net:
     driver: bridge
     name: neuroshield-net
-    ipam:
-      config:
-        - subnet: 172.22.0.0/16
   neuroshield-network:
     driver: bridge
 
