@@ -1,11 +1,9 @@
-FROM python:3.11-slim
+FROM python:3.13-alpine
 
 WORKDIR /app
 
 # Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-  curl \
-  && rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache curl
 
 # Copy requirements
 COPY src/dashboard/requirements-dashboard.txt .
@@ -17,7 +15,7 @@ RUN pip install --no-cache-dir -r requirements-dashboard.txt
 COPY src/dashboard/app_production.py ./app.py
 
 # Create non-root user
-RUN groupadd -r neuroshield && useradd -r -g neuroshield -m -u 1000 neuroshield
+RUN addgroup -S neuroshield && adduser -D -u 1000 -G neuroshield -h /home/neuroshield neuroshield
 
 # Create directories and set permissions
 RUN mkdir -p /app/data /app/logs && chown -R neuroshield:neuroshield /app

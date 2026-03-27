@@ -2,17 +2,15 @@
 # OPTIMIZED: Lightweight Streamlit dashboard - no heavy ML dependencies
 # ~500MB instead of 9GB by using only dashboard requirements
 
-FROM python:3.11-slim
+FROM python:3.13-alpine
 
 WORKDIR /app
 
 # Install system dependencies
-RUN apt-get update && apt-get install -y \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache curl
 
 # Create non-root user
-RUN groupadd -r neuroshield && useradd -r -g neuroshield -u 1000 neuroshield
+RUN addgroup -S neuroshield && adduser -D -u 1000 -G neuroshield -h /home/neuroshield neuroshield
 
 # Install ONLY dashboard-specific dependencies (no heavy ML libs)
 # This is the KEY OPTIMIZATION - skip requirements.txt with torch, transformers, etc

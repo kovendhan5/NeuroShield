@@ -1,14 +1,12 @@
-FROM python:3.11-slim
+FROM python:3.13-alpine
 
 WORKDIR /app
 
 # Install system dependencies
-RUN apt-get update && apt-get install -y \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache curl build-base openblas-dev lapack-dev
 
 # Create neuroshield user (non-root execution)
-RUN groupadd -r neuroshield && useradd -r -g neuroshield -u 1000 neuroshield
+RUN addgroup -S neuroshield && adduser -D -u 1000 -G neuroshield -h /home/neuroshield neuroshield
 
 # Copy requirements and install
 COPY --chown=neuroshield:neuroshield requirements.txt .
