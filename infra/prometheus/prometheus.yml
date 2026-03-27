@@ -18,18 +18,29 @@ scrape_configs:
     static_configs:
       - targets: ['localhost:9090']
 
-  # NeuroShield API (with built-in metrics)
+  # NeuroShield API (with built-in metrics) - try multiple possible hostnames
   - job_name: 'neuroshield-api'
     metrics_path: /prometheus_metrics
     scheme: http
     static_configs:
-      - targets: ['neuroshield-api:8000']
+      - targets: ['neuroshield-api:8000', 'neuroshield:8000', 'api:8000', 'localhost:8000', 'host.docker.internal:8000']
     scrape_interval: 10s
+    scrape_timeout: 5s
+    honor_labels: true
+
+  # NeuroShield Orchestrator (same metrics endpoint)
+  - job_name: 'neuroshield-orchestrator'
+    metrics_path: /prometheus_metrics
+    scheme: http
+    static_configs:
+      - targets: ['neuroshield-orchestrator:8000']
+    scrape_interval: 15s
+    scrape_timeout: 5s
 
   # Node exporter metrics for real host CPU/memory telemetry
   - job_name: 'node-exporter'
     static_configs:
-      - targets: ['neuroshield-node-exporter:9100']
+      - targets: ['neuroshield-node-exporter:9100', 'node-exporter:9100']
     scrape_interval: 10s
 
   # Optional: PostgreSQL Exporter (if postgres-exporter container is running)
