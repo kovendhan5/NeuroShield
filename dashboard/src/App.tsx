@@ -1,28 +1,28 @@
-import { Activity, AlertTriangle, CheckCircle2, Clock3, Cpu, Gauge, MemoryStick, ShieldAlert } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
+import { Activity, AlertTriangle, CheckCircle2, Clock3, Cpu, Gauge, MemoryStick, ShieldAlert } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Area,
-  AreaChart,
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Cell,
-  Legend,
-  Line,
-  LineChart,
-  Pie,
-  PieChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
+    Area,
+    AreaChart,
+    Bar,
+    BarChart,
+    CartesianGrid,
+    Cell,
+    Legend,
+    Line,
+    LineChart,
+    Pie,
+    PieChart,
+    ResponsiveContainer,
+    Tooltip,
+    XAxis,
+    YAxis,
 } from 'recharts';
 
 type TriggerState = 'READY' | 'HEALING' | 'COMPLETE';
 type TimelineFilter = 'ALL' | 'AUTO-FIX' | 'ALERT' | 'ESCALATED';
 type BadgeType = 'AUTO-FIX' | 'ALERT' | 'ESCALATED';
-type DashboardTab = 'overview' | 'analytics' | 'health' | 'audit' | 'settings';
+type DashboardTab = 'overview' | 'analytics' | 'health' | 'kubernetes' | 'audit' | 'settings';
 
 interface RecentFix {
   type: 'fix';
@@ -203,21 +203,47 @@ function badgeTypeFromAction(action: string, success: boolean): BadgeType {
 function toTimelineEntryFromRecentFix(recentFix: RecentFix, confidenceBase: number): TimelineEntry {
   const actionLower = recentFix.action.toLowerCase();
   const targetLower = recentFix.target.toLowerCase();
-  const sourceSystem = actionLower.includes('jenkins') || targetLower.includes('pipeline')
-    ? 'jenkins'
-    : actionLower.includes('pod') || actionLower.includes('k8s') || targetLower.includes('k8s')
-      ? 'kubernetes'
-      : actionLower.includes('grafana')
-        ? 'grafana'
-        : 'prometheus';
+  
+  // Determine source system with more precision
+  let sourceSystem = 'neuroshield';
+  if (actionLower.includes('jenkins') || targetLower.includes('pipeline') || actionLower.includes('build')) {
+    sourceSystem = 'jenkins';
+  } else if (actionLower.includes('pod') || actionLower.includes('k8s') || targetLower.includes('k8s') || 
+             actionLower.includes('restart') || actionLower.includes('scale') || actionLower.includes('deploy')) {
+    sourceSystem = 'kubernetes';
+  } else if (actionLower.includes('grafana') || actionLower.includes('dashboard')) {
+    sourceSystem = 'grafana';
+  } else if (actionLower.includes('metric') || actionLower.includes('scrape') || actionLower.includes('alert')) {
+    sourceSystem = 'prometheus';
+  }
+  
+  // Map action to human-readable description
+  let actionDescription = recentFix.action.replace(/_/g, ' ');
+  if (actionLower.includes('restart')) {
+    actionDescription = 'Pod Restart';
+  } else if (actionLower.includes('scale_up')) {
+    actionDescription = 'Scale Up Replicas';
+  } else if (actionLower.includes('scale_down')) {
+    actionDescription = 'Scale Down Replicas';
+  } else if (actionLower.includes('retry')) {
+    actionDescription = 'Retry Pipeline Build';
+  } else if (actionLower.includes('rollback')) {
+    actionDescription = 'Rollback Deployment';
+  } else if (actionLower.includes('cache') || actionLower.includes('clear')) {
+    actionDescription = 'Clear Build Cache';
+  } else if (actionLower.includes('escalate')) {
+    actionDescription = 'Escalate to Human';
+  }
+  
   return {
     id: `${recentFix.timestamp}-${recentFix.action}-${recentFix.target}`,
     timestamp: recentFix.timestamp,
     badge: badgeTypeFromAction(recentFix.action, recentFix.success),
-    action: `[${sourceSystem}] ${recentFix.action.replace(/_/g, ' ')} @ ${recentFix.target}`,
+    action: `[${sourceSystem}] ${actionDescription} @ ${recentFix.target}`,
     confidence: clamp(Math.round(confidenceBase), 1, 99),
     source: 'live',
-    reason: `Source: ${sourceSystem}`,
+    reason: `Source: ${sourceSystem} | Target: ${recentFix.target}`,
+    rawLog: `Action: ${recentFix.action}\nTarget: ${recentFix.target}\nSuccess: ${recentFix.success}\nTimestamp: ${recentFix.timestamp}`,
   };
 }
 
@@ -225,12 +251,38 @@ function toTimelineEntryFromHistory(entry: HealingHistoryEntry): TimelineEntry {
   const success = entry.result.toLowerCase() === 'success';
   const confidenceRaw = Number.isFinite(entry.failure_probability) ? entry.failure_probability * 100 : 0;
   const confidence = confidenceRaw > 0 ? clamp(Math.round(confidenceRaw), 1, 99) : (success ? 84 : 38);
+  
+  // Determine source system from action type
+  const actionLower = entry.action.toLowerCase();
+  const reasonLower = (entry.reason || '').toLowerCase();
+  let sourceSystem = 'neuroshield';
+  let detailedAction = entry.action.replace(/_/g, ' ');
+  
+  if (actionLower.includes('restart') || actionLower.includes('pod') || actionLower.includes('scale')) {
+    sourceSystem = 'kubernetes';
+    detailedAction = `[k8s] ${detailedAction}`;
+  } else if (actionLower.includes('build') || actionLower.includes('retry') || reasonLower.includes('jenkins')) {
+    sourceSystem = 'jenkins';
+    detailedAction = `[jenkins] ${detailedAction}`;
+  } else if (actionLower.includes('cache') || actionLower.includes('clear')) {
+    sourceSystem = 'prometheus';
+    detailedAction = `[prometheus] ${detailedAction}`;
+  } else if (actionLower.includes('rollback') || actionLower.includes('deploy')) {
+    sourceSystem = 'kubernetes';
+    detailedAction = `[k8s] ${detailedAction}`;
+  } else if (actionLower.includes('escalate')) {
+    sourceSystem = 'grafana';
+    detailedAction = `[grafana] ${detailedAction}`;
+  }
+  
   return {
     id: `${entry.timestamp}-${entry.action}-${entry.reason}`,
     timestamp: entry.timestamp,
     badge: badgeTypeFromAction(entry.action, success),
-    action: entry.action.replace(/_/g, ' '),
+    action: detailedAction,
     confidence,
+    reason: entry.reason ? `Source: ${sourceSystem} | ${entry.reason}` : `Source: ${sourceSystem}`,
+    source: 'history',
   };
 }
 
@@ -803,6 +855,7 @@ export default function App() {
               { key: 'overview', label: 'Overview' },
               { key: 'analytics', label: 'Analytics' },
               { key: 'health', label: 'Health' },
+              { key: 'kubernetes', label: 'Kubernetes' },
               { key: 'audit', label: 'Audit Log' },
               { key: 'settings', label: 'Settings & Safety' },
             ] as { key: DashboardTab; label: string }[]).map((tab) => (
@@ -1292,6 +1345,183 @@ export default function App() {
                 )}
               </div>
             </div>
+          </motion.section>
+        )}
+
+        {activeTab === 'kubernetes' && (
+          <motion.section variants={panelContainer} initial="hidden" animate="show" className="space-y-6">
+            {/* K8s Cluster Overview */}
+            <motion.div variants={panelItem} className="grid grid-cols-1 md:grid-cols-5 gap-4">
+              <div className="panel-surface rounded-xl border panel-border p-5 flex flex-col items-center justify-center">
+                <div className="text-xs text-muted-text mb-1">Cluster Health</div>
+                <div className="metric-font text-3xl" style={{ color: kubernetesRuntime.cluster_health >= 90 ? '#00ff9d' : kubernetesRuntime.cluster_health >= 70 ? '#ffb800' : '#ff3a3a' }}>
+                  {kubernetesRuntime.cluster_health.toFixed(1)}%
+                </div>
+              </div>
+              <div className="panel-surface rounded-xl border panel-border p-5 flex flex-col items-center justify-center">
+                <div className="text-xs text-muted-text mb-1">Active Deployments</div>
+                <div className="metric-font text-3xl text-accent-cyan">{pipelineOverview.length}</div>
+              </div>
+              <div className="panel-surface rounded-xl border panel-border p-5 flex flex-col items-center justify-center">
+                <div className="text-xs text-muted-text mb-1">Pod Restarts</div>
+                <div className="metric-font text-3xl text-primary-text">{kubernetesRuntime.pod_restarts_total}</div>
+              </div>
+              <div className="panel-surface rounded-xl border panel-border p-5 flex flex-col items-center justify-center">
+                <div className="text-xs text-muted-text mb-1">Failed Pods</div>
+                <div className="metric-font text-3xl" style={{ color: kubernetesRuntime.failed_pods > 0 ? '#ff3a3a' : '#00ff9d' }}>
+                  {kubernetesRuntime.failed_pods}
+                </div>
+              </div>
+              <div className="panel-surface rounded-xl border panel-border p-5 flex flex-col items-center justify-center">
+                <div className="text-xs text-muted-text mb-1">Auto-Heals</div>
+                <div className="metric-font text-3xl text-accent-green">{kubernetesRuntime.autoheals_total}</div>
+              </div>
+            </motion.div>
+
+            {/* Deployments Table */}
+            <motion.div variants={panelItem} className="panel-surface rounded-xl border panel-border p-5">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="heading-font text-2xl text-primary-text">KUBERNETES DEPLOYMENTS</h2>
+                <div className="flex items-center gap-2">
+                  <span className="relative flex h-2 w-2">
+                    <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75 animate-ping"></span>
+                    <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400"></span>
+                  </span>
+                  <span className="text-xs text-accent-green metric-font">LIVE</span>
+                </div>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-muted-text border-b panel-border">
+                      <th className="pb-3 metric-font">Deployment</th>
+                      <th className="pb-3 metric-font">Namespace</th>
+                      <th className="pb-3 metric-font">Status</th>
+                      <th className="pb-3 metric-font">Runs</th>
+                      <th className="pb-3 metric-font">Success</th>
+                      <th className="pb-3 metric-font">Failed</th>
+                      <th className="pb-3 metric-font">Auto-Heals</th>
+                      <th className="pb-3 metric-font">URL</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pipelineOverview.map((pipeline) => (
+                      <tr key={pipeline.id} className="border-b panel-border hover:bg-black/20 transition-colors">
+                        <td className="py-3">
+                          <div className="font-semibold text-primary-text">{pipeline.k8s_deployment}</div>
+                          <div className="text-xs text-muted-text">{pipeline.project}</div>
+                        </td>
+                        <td className="py-3">
+                          <span className="px-2 py-1 rounded text-xs metric-font bg-accent-cyan/20 text-accent-cyan">
+                            {pipeline.k8s_namespace}
+                          </span>
+                        </td>
+                        <td className="py-3">
+                          <span
+                            className="px-2 py-1 rounded text-xs metric-font"
+                            style={{
+                              background: pipeline.status === 'SUCCESS' ? '#00ff9d20' : pipeline.status === 'INCIDENT' ? '#ff3a3a20' : '#ffb80020',
+                              color: pipeline.status === 'SUCCESS' ? '#00ff9d' : pipeline.status === 'INCIDENT' ? '#ff3a3a' : '#ffb800',
+                            }}
+                          >
+                            {pipeline.status}
+                          </span>
+                        </td>
+                        <td className="py-3 text-primary-text metric-font">{pipeline.total_runs}</td>
+                        <td className="py-3 text-accent-green metric-font">{pipeline.success_runs}</td>
+                        <td className="py-3 text-danger metric-font">{pipeline.failed_runs}</td>
+                        <td className="py-3 text-accent-cyan metric-font">{pipeline.autoheal_actions}</td>
+                        <td className="py-3">
+                          {pipeline.deployment_url && (
+                            <a
+                              href={pipeline.deployment_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-accent-cyan hover:underline text-xs"
+                            >
+                              Open →
+                            </a>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </motion.div>
+
+            {/* K8s Logs and Metrics */}
+            <motion.div variants={panelItem} className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Pod Events */}
+              <div className="panel-surface rounded-xl border panel-border p-5">
+                <h3 className="heading-font text-lg text-primary-text mb-3">POD EVENTS</h3>
+                <div className="space-y-2 max-h-64 overflow-y-auto">
+                  {serviceLogs.filter(l => l.service === 'kubernetes').slice(0, 15).map((log, idx) => (
+                    <div key={`k8s-log-${idx}`} className="flex items-start gap-2 text-xs border-b panel-border pb-2">
+                      <span className="text-muted-text metric-font whitespace-nowrap">
+                        {new Date(log.timestamp).toLocaleTimeString()}
+                      </span>
+                      <span
+                        className="px-1 py-0.5 rounded metric-font"
+                        style={{
+                          background: log.level === 'ERROR' ? '#ff3a3a30' : log.level === 'WARN' ? '#ffb80030' : '#00ff9d20',
+                          color: log.level === 'ERROR' ? '#ff3a3a' : log.level === 'WARN' ? '#ffb800' : '#00ff9d',
+                        }}
+                      >
+                        {log.level}
+                      </span>
+                      <span className="text-primary-text break-all">{log.message}</span>
+                    </div>
+                  ))}
+                  {serviceLogs.filter(l => l.service === 'kubernetes').length === 0 && (
+                    <div className="text-muted-text text-sm">No Kubernetes events yet...</div>
+                  )}
+                </div>
+              </div>
+
+              {/* Resource Usage */}
+              <div className="panel-surface rounded-xl border panel-border p-5">
+                <h3 className="heading-font text-lg text-primary-text mb-3">CLUSTER RESOURCES</h3>
+                <div className="space-y-4">
+                  {resourceUsage.map((resource) => (
+                    <div key={resource.name}>
+                      <div className="flex items-center justify-between text-sm mb-1">
+                        <span className="text-muted-text flex items-center gap-2">
+                          {resource.icon}
+                          {resource.name}
+                        </span>
+                        <span className="metric-font text-primary-text">{resource.value}%</span>
+                      </div>
+                      <div className="h-2 bg-black/40 rounded-full overflow-hidden">
+                        <motion.div
+                          className="h-full rounded-full"
+                          style={{ backgroundColor: resourceBarColor(resource.value) }}
+                          initial={{ width: 0 }}
+                          animate={{ width: `${resource.value}%` }}
+                          transition={{ duration: 0.5 }}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </motion.div>
+
+            {/* Last Auto-Heal */}
+            <motion.div variants={panelItem} className="panel-surface rounded-xl border panel-border p-5">
+              <h3 className="heading-font text-lg text-primary-text mb-3">LAST AUTO-HEAL EVENT</h3>
+              <div className="flex items-center gap-4">
+                <div className="text-accent-green">
+                  <CheckCircle2 size={32} />
+                </div>
+                <div>
+                  <div className="text-primary-text font-semibold">Kubernetes cluster auto-healed successfully</div>
+                  <div className="text-sm text-muted-text">
+                    {new Date(kubernetesRuntime.last_autoheal).toLocaleString()} · Total heals: {kubernetesRuntime.autoheals_total}
+                  </div>
+                </div>
+              </div>
+            </motion.div>
           </motion.section>
         )}
 

@@ -6,3 +6,8 @@ datasources:
     access: proxy
     url: http://neuroshield-prometheus:9090
     isDefault: true
+    uid: prometheus
+    editable: true
+    jsonData:
+      httpMethod: GET
+      timeInterval: "10s"
