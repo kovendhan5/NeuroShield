@@ -62,7 +62,7 @@
       "pluginVersion": "8.0.0",
       "targets": [
         {
-          "expr": "app_health_percentage",
+          "expr": "neuroshield_healing_success_rate * 100",
           "refId": "A"
         }
       ],
@@ -137,8 +137,8 @@
       "pluginVersion": "8.0.0",
       "targets": [
         {
-          "expr": "rate(app_requests_total[1m])",
-          "legendFormat": "{{method}} {{endpoint}}",
+          "expr": "rate(neuroshield_healing_actions_total[5m])",
+          "legendFormat": "healing actions rate",
           "refId": "A"
         }
       ],
@@ -213,8 +213,8 @@
       "pluginVersion": "8.0.0",
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, rate(app_request_latency_seconds_bucket[5m]))*1000",
-          "legendFormat": "p95 {{endpoint}}",
+          "expr": "neuroshield_mttr_seconds * 1000",
+          "legendFormat": "mttr p95 proxy",
           "refId": "A"
         }
       ],
@@ -269,8 +269,8 @@
       "pluginVersion": "8.0.0",
       "targets": [
         {
-          "expr": "app_request_errors_total",
-          "legendFormat": "{{error_type}}",
+          "expr": "neuroshield_audit_by_result{result=\"FAILURE\"}",
+          "legendFormat": "failed operations",
           "refId": "A"
         }
       ],
@@ -321,7 +321,7 @@
       "pluginVersion": "8.0.0",
       "targets": [
         {
-          "expr": "db_connections_active",
+          "expr": "neuroshield_active_alerts",
           "refId": "A"
         }
       ],
@@ -396,8 +396,8 @@
       "pluginVersion": "8.0.0",
       "targets": [
         {
-          "expr": "rate(jobs_processed_total[5m])",
-          "legendFormat": "{{status}}",
+          "expr": "rate(neuroshield_healing_by_action[5m])",
+          "legendFormat": "{{action}}",
           "refId": "A"
         }
       ],
@@ -448,7 +448,7 @@
       "pluginVersion": "8.0.0",
       "targets": [
         {
-          "expr": "cache_hits_total",
+          "expr": "neuroshield_jenkins_builds_success_total",
           "refId": "A"
         }
       ],
@@ -499,7 +499,7 @@
       "pluginVersion": "8.0.0",
       "targets": [
         {
-          "expr": "cache_misses_total",
+          "expr": "neuroshield_jenkins_builds_failed_total",
           "refId": "A"
         }
       ],

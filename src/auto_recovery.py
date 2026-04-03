@@ -24,7 +24,7 @@ class ServiceHealthCheck:
                 check=True
             )
             return True
-        except:
+        except Exception:
             return False
 
     @staticmethod
@@ -34,7 +34,7 @@ class ServiceHealthCheck:
             import requests
             response = requests.get("http://localhost:8080/", timeout=5)
             return response.status_code < 400
-        except:
+        except Exception:
             return False
 
     @staticmethod
@@ -44,7 +44,7 @@ class ServiceHealthCheck:
             import requests
             response = requests.get("http://localhost:9090/-/healthy", timeout=5)
             return response.status_code == 200
-        except:
+        except Exception:
             return False
 
     @staticmethod
@@ -54,7 +54,7 @@ class ServiceHealthCheck:
             import requests
             response = requests.get("http://localhost:8502/health", timeout=5)
             return response.status_code == 200
-        except:
+        except Exception:
             return False
 
     @staticmethod
@@ -64,7 +64,7 @@ class ServiceHealthCheck:
             import requests
             response = requests.get("http://localhost:8501/", timeout=5)
             return response.status_code < 500
-        except:
+        except Exception:
             return False
 
 
@@ -195,7 +195,7 @@ class OrchestrationRecovery:
         # Stop current process
         try:
             subprocess.run("pkill -f 'python.*main.py'", shell=True, capture_output=True)
-        except:
+        except Exception:
             pass
 
         # Wait
@@ -226,7 +226,7 @@ class OrchestrationRecovery:
                 from src.logging_system import get_logger as get_logger_fn
                 logger_inst = get_logger_fn()
                 logger_inst.clear_old_logs(days=1)
-            except:
+            except Exception:
                 pass
 
             # Restart if still critical
@@ -252,7 +252,7 @@ class OrchestrationRecovery:
                 from src.state_manager import get_state_manager
                 state_mgr = get_state_manager()
                 # TODO: Mark action as failed in database
-            except:
+            except Exception:
                 pass
 
 
@@ -284,7 +284,7 @@ def start_auto_recovery_monitor(check_interval_seconds: int = 60):
                         source="auto_recovery",
                         context=checks
                     )
-            except Exception as e:
+            except Exception:
                 pass
 
             time.sleep(check_interval_seconds)

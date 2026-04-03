@@ -25,7 +25,7 @@ torch>=2.1.0
 transformers>=4.35.0
 
 # RL & Machine Learning
-gym>=0.29.0
+gymnasium>=0.29.0
 stable-baselines3>=2.3.0
 
 # Dashboard
@@ -50,3 +50,12 @@ cryptography>=41.0.0
 
 # Structured Logging
 structlog>=23.2.0
+
+# Flask & Extensions
+Flask>=3.0.0
+flask-cors>=4.0.0
+flask-limiter>=3.5.0
+
+# Database & Cache clients
+redis>=5.0.1
+psycopg2-binary>=2.9.9

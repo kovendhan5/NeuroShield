@@ -23,7 +23,7 @@ load_dotenv()
 
 # Configure logging
 logging.basicConfig(
-    level=os.getenv("LOG_LEVEL", "INFO"),
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
@@ -96,6 +96,13 @@ def main():
     logger.info("="*60)
 
     while not shutdown_requested:
+        # Update heartbeat file for Docker healthcheck
+        try:
+            with open("/tmp/worker_alive", "w") as f:
+                f.write(str(time.time()))
+        except Exception:
+            pass
+            
         cycle_count += 1
         cycle_start = time.time()
 

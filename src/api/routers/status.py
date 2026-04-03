@@ -23,6 +23,7 @@ router = APIRouter()
 JENKINS_URL = os.getenv("JENKINS_URL", "http://localhost:8080")
 PROMETHEUS_URL = os.getenv("PROMETHEUS_URL", "http://localhost:9090")
 DUMMY_APP_URL = os.getenv("DUMMY_APP_URL", "http://localhost:5000")
+DUMMY_APP_REQUIRED = os.getenv("DUMMY_APP_REQUIRED", "false").lower() == "true"
 TELEMETRY_CSV = Path("data/telemetry.csv")
 
 
@@ -44,8 +45,9 @@ def health():
     services = {
         "jenkins": ServiceStatus(status=_service_status(JENKINS_URL), url=JENKINS_URL),
         "prometheus": ServiceStatus(status=_service_status(f"{PROMETHEUS_URL}/-/healthy"), url=PROMETHEUS_URL),
-        "dummy_app": ServiceStatus(status=_service_status(f"{DUMMY_APP_URL}/health"), url=DUMMY_APP_URL),
     }
+    dummy_status = _service_status(f"{DUMMY_APP_URL}/health")
+    services["dummy_app"] = ServiceStatus(status=dummy_status, url=DUMMY_APP_URL)
 
     models = ModelStatus(
         failure_predictor="loaded" if Path("models/failure_predictor.pth").exists() else "missing",
@@ -53,7 +55,12 @@ def health():
         pca_encoder="loaded" if Path("models/log_pca.joblib").exists() else "missing",
     )
 
-    all_online = all(s.status == "ONLINE" for s in services.values())
+    required_services = {
+        name: svc
+        for name, svc in services.items()
+        if name != "dummy_app" or DUMMY_APP_REQUIRED
+    }
+    all_online = all(s.status == "ONLINE" for s in required_services.values())
     all_models = all(v == "loaded" for v in models.model_dump().values())
     overall = "HEALTHY" if (all_online and all_models) else "DEGRADED"
 

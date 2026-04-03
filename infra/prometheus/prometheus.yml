@@ -1,14 +1,16 @@
 global:
-  scrape_interval: 15s
-  evaluation_interval: 15s
+  scrape_interval: 10s
+  evaluation_interval: 10s
+  external_labels:
+    cluster: 'neuroshield-prod'
 
 alerting:
   alertmanagers:
     - static_configs:
-        - targets: ['localhost:9093']
+        - targets: ['neuroshield-alertmanager:9093']
 
 rule_files:
-  # - "alert_rules.yml"
+  - /etc/prometheus/alert_rules.yml
 
 scrape_configs:
   # Prometheus self-monitoring
@@ -16,90 +18,36 @@ scrape_configs:
     static_configs:
       - targets: ['localhost:9090']
 
-  # Host metrics (Node Exporter)
+  # NeuroShield API (with built-in metrics)
+  - job_name: 'neuroshield-api'
+    metrics_path: /prometheus_metrics
+    scheme: http
+    static_configs:
+      - targets: ['neuroshield-api:8000']
+    scrape_interval: 10s
+
+  # Node exporter metrics for real host CPU/memory telemetry
   - job_name: 'node-exporter'
     static_configs:
-      - targets: ['localhost:9100']
+      - targets: ['neuroshield-node-exporter:9100']
+    scrape_interval: 10s
 
-  # Jenkins CI/CD
-  - job_name: 'jenkins'
-    metrics_path: /prometheus/
-    scheme: http
+  # Optional: PostgreSQL Exporter (if postgres-exporter container is running)
+  - job_name: 'postgres-exporter'
     static_configs:
-      - targets: ['jenkins:8080']
-    scrape_interval: 30s
-
-  # Real Microservices (API Service)
-  - job_name: 'api-service'
-    metrics_path: /metrics
-    scheme: http
-    static_configs:
-      - targets: ['api-service.neuroshield-prod:5000']
+      - targets: ['neuroshield-postgres-exporter:9187']
     scrape_interval: 15s
     relabel_configs:
-      - source_labels: [__address__]
+      - action: replace
         target_label: instance
-        replacement: 'api-service'
+        replacement: neuroshield-postgres
 
-  # Real Microservices (Web Service)
-  - job_name: 'web-service'
-    metrics_path: /metrics
-    scheme: http
+  # Optional: Redis Exporter (if redis-exporter service is running)
+  - job_name: 'redis-exporter'
     static_configs:
-      - targets: ['web-service.neuroshield-prod:5000']
+      - targets: ['neuroshield-redis-exporter:9121']
     scrape_interval: 15s
     relabel_configs:
-      - source_labels: [__address__]
+      - action: replace
         target_label: instance
-        replacement: 'web-service'
-
-  # Real Microservices (Worker Service)
-  - job_name: 'worker-service'
-    metrics_path: /metrics
-    scheme: http
-    static_configs:
-      - targets: ['worker-service.neuroshield-prod:8000']
-    scrape_interval: 15s
-    relabel_configs:
-      - source_labels: [__address__]
-        target_label: instance
-        replacement: 'worker-service'
-
-  # Kubernetes kubelet (if available)
-  - job_name: 'kubernetes-kubelet'
-    scheme: https
-    tls_config:
-      insecure_skip_verify: true
-    bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
-    kubernetes_sd_configs:
-      - role: node
-    relabel_configs:
-      - action: labelmap
-        regex: __meta_kubernetes_node_label_(.+)
-
-  # Kubernetes pods with prometheus annotation
-  - job_name: 'kubernetes-pods'
-    honor_labels: true
-    kubernetes_sd_configs:
-      - role: pod
-    relabel_configs:
-      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
-        action: keep
-        regex: true
-      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
-        action: replace
-        target_label: __metrics_path__
-        regex: (.+)
-      - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
-        action: replace
-        regex: ([^:]+)(?::\d+)?;(\d+)
-        replacement: $1:$2
-        target_label: __address__
-      - action: labelmap
-        regex: __meta_kubernetes_pod_label_(.+)
-      - source_labels: [__meta_kubernetes_namespace]
-        action: replace
-        target_label: kubernetes_namespace
-      - source_labels: [__meta_kubernetes_pod_name]
-        action: replace
-        target_label: kubernetes_pod_name
+        replacement: neuroshield-redis

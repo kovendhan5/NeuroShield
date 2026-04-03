@@ -479,24 +479,36 @@ class CICDAutoFixer:
                 reversible=True,
             )
 
-        # Maven cache is typically in ~/.m2/repository
         try:
-            m2_path = Path.home() / ".m2" / "repository"
-            if m2_path.exists():
-                actions.append(f"Clearing maven cache at {m2_path}")
-                # SAFETY: Only delete if path matches expected pattern
-                if ".m2/repository" in str(m2_path):
-                    import shutil
-                    shutil.rmtree(m2_path, ignore_errors=True)
-                    actions.append("maven cache cleared")
+            # Maven cache must resolve inside ~/.m2/repository (canonical path check)
+            expected_root = (Path.home() / ".m2").resolve()
+            expected_repo = (expected_root / "repository").resolve()
+
+            if expected_repo.exists():
+                resolved_repo = expected_repo.resolve()
+                if not resolved_repo.is_relative_to(expected_root):
                     return FixResult(
-                        success=True,
+                        success=False,
                         fix_type="maven_cache_clear",
                         duration_ms=0.0,
-                        details="maven cache cleared",
+                        details=f"Unsafe maven cache path rejected: {resolved_repo}",
                         actions_taken=actions,
-                        reversible=False,  # Cache deletion is not reversible
+                        reversible=True,
                     )
+
+                actions.append(f"Clearing maven cache at {resolved_repo}")
+                import shutil
+
+                shutil.rmtree(resolved_repo, ignore_errors=True)
+                actions.append("maven cache cleared")
+                return FixResult(
+                    success=True,
+                    fix_type="maven_cache_clear",
+                    duration_ms=0.0,
+                    details="maven cache cleared",
+                    actions_taken=actions,
+                    reversible=False,  # Cache deletion is not reversible
+                )
             else:
                 return FixResult(
                     success=False,

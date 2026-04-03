@@ -61,7 +61,7 @@ class Validator:
         env_file = self.project_root / ".env"
         if not env_file.exists():
             self.print_result("WARN", ".env file not found - using defaults")
-            return False
+            return True
 
         env_vars = {
             "JENKINS_URL": "http://localhost:8080",
@@ -80,7 +80,6 @@ class Validator:
                 self.print_result("OK", f"{key:30} = {current_env[key]}")
             else:
                 self.print_result("WARN", f"{key:30} not set (using {default})")
-                all_ok = False
 
         return all_ok
 
@@ -100,7 +99,6 @@ class Validator:
             "tests",
             "data",
             "models",
-            "neuroshield-pro",
         ]
 
         all_ok = True

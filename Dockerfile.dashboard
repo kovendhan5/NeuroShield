@@ -1,11 +1,9 @@
-FROM python:3.11-slim
+FROM python:3.13-alpine
 
 WORKDIR /app
 
 # Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache curl
 
 # Copy requirements
 COPY src/dashboard/requirements-dashboard.txt .
@@ -16,8 +14,14 @@ RUN pip install --no-cache-dir -r requirements-dashboard.txt
 # Copy dashboard app
 COPY src/dashboard/app_production.py ./app.py
 
-# Create directories
-RUN mkdir -p /app/data /app/logs && chmod 777 /app/data /app/logs
+# Create non-root user
+RUN addgroup -S neuroshield && adduser -D -u 1000 -G neuroshield -h /home/neuroshield neuroshield
+
+# Create directories and set permissions
+RUN mkdir -p /app/data /app/logs && chown -R neuroshield:neuroshield /app
+
+# Switch to non-root user
+USER neuroshield
 
 # Streamlit config
 RUN mkdir -p ~/.streamlit && echo "[server]\nheadless = true\nport = 8501" > ~/.streamlit/config.toml

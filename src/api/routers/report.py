@@ -32,7 +32,7 @@ def report_summary():
 def report_generate():
     """Trigger model report regeneration in the background."""
     subprocess.Popen(
-        [sys.executable, "scripts/generate_model_report.py"],
+        [sys.executable, "scripts/demo/generate_model_report.py"],
         cwd=str(Path.cwd()),
     )
     return {

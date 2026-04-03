@@ -459,13 +459,15 @@ if _report_path.exists():
     st.sidebar.success(f"Report generated\n{_mod_time.strftime('%Y-%m-%d %H:%M')}")
     if st.sidebar.button("\U0001f504 Regenerate Report"):
         import subprocess as _sp
-        _sp.Popen([sys.executable, "scripts/generate_model_report.py"])
+        # Changed to accurate path
+        _sp.Popen([sys.executable, "scripts/demo/generate_model_report.py"])
         st.sidebar.info("Generating... (~30 seconds)")
 else:
     st.sidebar.warning("No report yet")
     if st.sidebar.button("\U0001f4ca Generate Report"):
         import subprocess as _sp
-        _sp.Popen([sys.executable, "scripts/generate_model_report.py"])
+        # Changed to accurate path
+        _sp.Popen([sys.executable, "scripts/demo/generate_model_report.py"])
         st.sidebar.info("Generating... (~30 seconds)")
 
 # Notification configuration status

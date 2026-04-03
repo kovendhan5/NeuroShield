@@ -4,7 +4,9 @@ Uses FastAPI TestClient — no running server required.
 """
 
 import pytest
+import torch
 from fastapi.testclient import TestClient
+from unittest.mock import patch
 
 from src.api.main import app
 
@@ -71,7 +73,39 @@ def test_telemetry_summary():
 
 
 # 7. POST /predict with FAILURE log returns prob > 0.5
-def test_predict_failure():
+@patch("transformers.AutoModel.from_pretrained")
+@patch("transformers.AutoTokenizer.from_pretrained")
+def test_predict_failure(mock_tokenizer_from_pretrained, mock_model_from_pretrained):
+    class DummyTokenizer:
+        def __call__(self, batch, padding=True, truncation=True, max_length=128, return_tensors="pt"):
+            batch_size = len(batch)
+            seq_len = min(max_length, 8)
+            return {
+                "input_ids": torch.ones((batch_size, seq_len), dtype=torch.long),
+                "attention_mask": torch.ones((batch_size, seq_len), dtype=torch.long),
+            }
+
+    class DummyModel:
+        def to(self, device):
+            return self
+
+        def eval(self):
+            return self
+
+        def __call__(self, **encoded):
+            input_ids = encoded["input_ids"]
+            batch_size, seq_len = input_ids.shape
+            hidden = torch.ones((batch_size, seq_len, 768), dtype=torch.float32)
+
+            class DummyOutput:
+                def __init__(self, last_hidden_state):
+                    self.last_hidden_state = last_hidden_state
+
+            return DummyOutput(hidden)
+
+    mock_tokenizer_from_pretrained.return_value = DummyTokenizer()
+    mock_model_from_pretrained.return_value = DummyModel()
+
     r = client.post("/predict", json={
         "log_text": "Finished: FAILURE",
         "cpu": 45.0,

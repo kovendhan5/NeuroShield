@@ -1,11 +1,9 @@
-FROM python:3.11-slim
+FROM python:3.13-alpine
 
 WORKDIR /app
 
 # Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache curl
 
 # Install production dependencies for hardened microservice
 # - gunicorn: WSGI server (not Flask dev server)
@@ -28,7 +26,7 @@ RUN pip install --no-cache-dir \
 COPY apps/microservice_hardened.py microservice.py
 
 # Create non-root user for security
-RUN useradd -m -u 1000 appuser && \
+RUN adduser -D -u 1000 appuser && \
     mkdir -p /app/logs /app/data && \
     chown -R appuser:appuser /app
 
@@ -39,7 +37,7 @@ EXPOSE 5000
 
 # Health check with JWT token support
 HEALTHCHECK --interval=10s --timeout=5s --retries=3 --start-period=30s \
-  CMD curl -f -H "Authorization: Bearer ${API_SECRET_KEY}" http://localhost:5000/health || exit 1
+    CMD curl -f -H "Authorization: Bearer ${API_SECRET_KEY}" http://localhost:5000/health || exit 1
 
 # Run with Gunicorn for production
 CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "4", "--worker-class", "sync", "--max-requests", "1000", "--max-requests-jitter", "100", "--timeout", "30", "--access-logfile", "-", "--error-logfile", "-", "microservice:app"]
